@@ -80,9 +80,13 @@ function matchingProjects(projects: Project[], query: string): Project[] {
   return projects.filter((project) => project.name.toLowerCase().includes(lowerQuery));
 }
 
+const SCRATCH_KEY = 'new-scratch';
+
 interface ProjectSearchProps {
   projects: Project[];
   projectId: string;
+  /** A scratch workspace is picked in place of a project */
+  scratchSelected: boolean;
   onSelect: (id: string) => void;
   onAddProject: () => void;
   onOpenFolderWorkspace: () => void;
@@ -104,6 +108,7 @@ interface ProjectSearchOption {
 function ProjectSearch({
   projects,
   projectId,
+  scratchSelected,
   onSelect,
   onAddProject,
   onOpenFolderWorkspace,
@@ -112,7 +117,9 @@ function ProjectSearch({
   const [query, setQuery] = useState('');
   // The selected row by key, so it stays put when the projects change while open. A row no
   // longer listed selects the first matching project.
-  const [selectedKey, setSelectedKey] = useState<string | null>(projectId);
+  const [selectedKey, setSelectedKey] = useState<string | null>(
+    scratchSelected ? SCRATCH_KEY : projectId
+  );
   const listId = useId();
   const matches = matchingProjects(projects, query);
   const projectOptions: ProjectSearchOption[] = matches.map((project) => ({
@@ -153,13 +160,16 @@ function ProjectSearch({
       ),
     },
     {
-      key: 'new-scratch',
+      key: SCRATCH_KEY,
       run: onNewScratchWorkspace,
-      className: 'text-muted-foreground',
+      className: cn('justify-between', !scratchSelected && 'text-muted-foreground'),
       content: (
         <>
-          <Flask />
-          New scratch workspace
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Flask />
+            New scratch workspace
+          </span>
+          {scratchSelected && <Check className="ml-3 size-4 shrink-0" />}
         </>
       ),
     },
@@ -226,11 +236,13 @@ function ProjectSearch({
           onChange={(event) => {
             setQuery(event.target.value);
             // Typing selects the best match, and keeps it if the projects reorder. A cleared
-            // search goes back to the current project.
+            // search goes back to the current pick.
             setSelectedKey(
               event.target.value.trim()
                 ? (matchingProjects(projects, event.target.value)[0]?.id ?? null)
-                : projectId
+                : scratchSelected
+                  ? SCRATCH_KEY
+                  : projectId
             );
           }}
           onKeyDown={handleKeyDown}
@@ -470,6 +482,8 @@ export interface NewWorkspaceProjectPickerProps {
   projectId: string;
   setProjectId: (id: string) => void;
   selectedProject: Project | undefined;
+  /** A scratch workspace is picked in place of a project */
+  scratchSelected?: boolean;
   /** The project dropdown, also opened by pressing the New workspace shortcut again */
   projectPickerOpen: boolean;
   onProjectPickerOpenChange: (open: boolean) => void;
@@ -489,6 +503,7 @@ export function NewWorkspaceProjectPicker({
   projectId,
   setProjectId,
   selectedProject,
+  scratchSelected = false,
   projectPickerOpen,
   onProjectPickerOpenChange,
   onAddProject,
@@ -540,8 +555,14 @@ export function NewWorkspaceProjectPicker({
               } as React.CSSProperties
             }
           >
-            <ProjectMark project={selectedProject} iconClassName="size-3" />
-            <span className="truncate">{selectedProject?.name || 'Select project'}</span>
+            {scratchSelected ? (
+              <Flask className="size-3 shrink-0" />
+            ) : (
+              <ProjectMark project={selectedProject} iconClassName="size-3" />
+            )}
+            <span className="truncate">
+              {scratchSelected ? 'Scratch workspace' : selectedProject?.name || 'Select project'}
+            </span>
           </span>
           <SegmentCaret />
           {/* Pressing New workspace again is the quickest way here, so the keys show on hover,
@@ -566,6 +587,7 @@ export function NewWorkspaceProjectPicker({
         <ProjectSearch
           projects={projects}
           projectId={projectId}
+          scratchSelected={scratchSelected}
           onSelect={(id) => {
             setProjectId(id);
             onProjectPickerOpenChange(false);

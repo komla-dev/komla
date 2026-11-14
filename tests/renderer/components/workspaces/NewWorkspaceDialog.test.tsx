@@ -290,8 +290,19 @@ vi.mock('../../../../src/renderer/components/workspaces/WorkspaceBranchPicker', 
 }));
 
 vi.mock('../../../../src/renderer/components/projects/ProjectCreationForm', () => ({
-  ProjectCreationForm: ({ initialPath }: { initialPath?: string }) => (
-    <div>Project Form{initialPath && ` on ${initialPath}`}</div>
+  ProjectCreationForm: ({
+    initialPath,
+    onSuccess,
+  }: {
+    initialPath?: string;
+    onSuccess?: (project: { id: string }) => void;
+  }) => (
+    <div>
+      Project Form{initialPath && ` on ${initialPath}`}
+      <button type="button" onClick={() => onSuccess?.({ id: 'project-empty' })}>
+        Finish adding
+      </button>
+    </div>
   ),
 }));
 
@@ -2327,13 +2338,20 @@ describe('NewWorkspaceDialog', () => {
     });
   });
 
-  it('starts a scratch workspace with the prompt, without picking a folder', async () => {
+  it('starts a scratch workspace on Launch once picked, without picking a folder', async () => {
     const user = userEvent.setup();
 
     render(<NewWorkspaceDialog open={true} onOpenChange={vi.fn()} />);
     const prompt = await screen.findByPlaceholderText(/what should the agent work on/i);
     await user.type(prompt, 'Try out the new API');
     await pickFromProjectDropdown(user, /^new scratch workspace$/i);
+
+    // Picked like a project: the heading names it, and nothing starts until Launch.
+    expect(screen.getByRole('button', { name: /scratch workspace/i })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('swift-fox')).not.toBeInTheDocument();
+    expect(mockCreateWorkspace).not.toHaveBeenCalled();
+
+    await user.click(getLaunchButton());
 
     await waitFor(() =>
       expect(mockCreateWorkspace).toHaveBeenCalledWith(
@@ -2346,6 +2364,49 @@ describe('NewWorkspaceDialog', () => {
     );
     expect(mockCreateWorkspace.mock.calls[0][0]).not.toHaveProperty('directoryPath');
     expect(window.api.selectAnyDirectory).not.toHaveBeenCalled();
+  });
+
+  it('picks scratch from the empty state without projects, and starts it on Launch', async () => {
+    const user = userEvent.setup();
+    const projects = mockProjects.splice(0);
+    try {
+      render(<NewWorkspaceDialog open={true} onOpenChange={vi.fn()} />);
+      await user.click(await screen.findByRole('button', { name: 'Scratch' }));
+
+      expect(screen.getByTitle(/^choose project/i)).toHaveTextContent('Scratch workspace');
+      expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
+      expect(mockCreateWorkspace).not.toHaveBeenCalled();
+
+      await user.click(getLaunchButton());
+
+      await waitFor(() =>
+        expect(mockCreateWorkspace).toHaveBeenCalledWith(
+          expect.objectContaining({ mode: 'directory', scratch: true })
+        )
+      );
+    } finally {
+      mockProjects.push(...projects);
+    }
+  });
+
+  it('launches in a project added after picking scratch, not in a scratch folder', async () => {
+    const user = userEvent.setup();
+
+    render(<NewWorkspaceDialog open={true} onOpenChange={vi.fn()} />);
+    await screen.findByPlaceholderText(/what should the agent work on/i);
+    await pickFromProjectDropdown(user, /^new scratch workspace$/i);
+    await pickFromProjectDropdown(user, /^add project…$/i);
+    await user.click(screen.getByRole('button', { name: 'Finish adding' }));
+
+    expect(screen.getByTitle(/^choose project/i)).toHaveTextContent('Empty Prefix Project');
+    await user.click(getLaunchButton());
+
+    await waitFor(() =>
+      expect(mockCreateWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: 'worktree', projectId: 'project-empty' })
+      )
+    );
+    expect(mockCreateWorkspace.mock.calls[0][0]).not.toHaveProperty('scratch');
   });
 
   it('asks before opening a Git repository without a project, offering to add it', async () => {
@@ -5099,6 +5160,25 @@ describe('NewWorkspaceDialog', () => {
       fireEvent.keyDown(textarea, { key: 'p', altKey: true });
 
       await waitFor(() => expect(branchInput).toHaveValue('swift-fox'));
+    });
+
+    it('leaves a scratch pick for a project with the next project shortcut', async () => {
+      const user = userEvent.setup();
+      seedShortcuts({ 'newWorkspace.cycleProject': 'Alt+P' });
+      // With a single project, which is still another pick than scratch.
+      const others = mockProjects.splice(1);
+      try {
+        render(<NewWorkspaceDialog open={true} onOpenChange={vi.fn()} />);
+        const textarea = await screen.findByPlaceholderText(/what should the agent work on/i);
+        await pickFromProjectDropdown(user, /^new scratch workspace$/i);
+        expect(screen.queryByPlaceholderText('komla/swift-fox')).not.toBeInTheDocument();
+
+        fireEvent.keyDown(textarea, { key: 'p', altKey: true });
+
+        expect(await screen.findByPlaceholderText('komla/swift-fox')).toBeInTheDocument();
+      } finally {
+        mockProjects.push(...others);
+      }
     });
 
     it('leaves an unbound agent cycle out of the dialog and its hints', async () => {
