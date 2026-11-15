@@ -16,3 +16,9 @@ export interface ViewerFolderFile {
   /** When the file was last modified, in milliseconds since the epoch, if known. */
   modifiedMs?: number;
 }
+
+/**
+ * What a viewer read throws for a path that turns out to be a folder, as an agent prints one
+ * without its trailing slash, so the viewer shows the folder instead.
+ */
+export const VIEWER_PATH_IS_FOLDER_ERROR = 'EISDIR: this path is a folder';

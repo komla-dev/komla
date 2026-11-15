@@ -65,6 +65,11 @@ interface QuickLookState {
   open: (workspaceId: string, item: QuickLookItem) => void;
   /** Shows a file from the sidebar, chosen in `from`: Recent, or the folder's section. */
   show: (item: QuickLookItem, from: QuickLookSection) => void;
+  /**
+   * Shows the item on screen as the folder a read found it to be, as an agent prints one without
+   * its trailing slash. False when it is no longer on screen, or already a folder.
+   */
+  showAsFolder: (item: QuickLookItem) => boolean;
   /** Moves through the sidebar's files, with `listed` the terminal files it lists. */
   step: (delta: number, listed?: QuickLookListed) => void;
   close: () => void;
@@ -346,6 +351,18 @@ export const useQuickLookStore = create<QuickLookState>((set, get) => {
       if (!session) return;
       set({ session: { workspaceId: session.workspaceId, item, from } });
       syncFolder();
+    },
+
+    showAsFolder: (item) => {
+      const { session } = get();
+      if (session?.item !== item || isQuickLookFolder(item)) return false;
+      const name = POSIX_NAME.exec(quickLookReferencePath(item))![0];
+      // `.` and `..` name another folder than the one they end, which the sidebar would go up from.
+      if (name === '.' || name === '..') return false;
+      // Named as in its folder's listing, with the trailing slash a folder has there.
+      set({ session: { ...session, item: folderItem(item, { name: `${name}/` }) } });
+      syncFolder();
+      return true;
     },
 
     step: (delta, listed) => {

@@ -67,6 +67,42 @@ describe('quick-look.store', () => {
     expect(paths().folder).toEqual(['/tmp/out/build.tar', '/tmp/out/b.png', '/tmp/out/a.png']);
   });
 
+  it('shows a file a read found to be a folder as that folder, only while on screen', () => {
+    const { open, showAsFolder } = useQuickLookStore.getState();
+    const printed = { ...terminalItem('/tmp/x/hedge'), lineNumber: 3 };
+    const workspacePrinted: QuickLookItem = {
+      path: 'out\\hedge',
+      terminalId: 'term-1',
+      source: { kind: 'workspace', filePath: 'out/hedge' },
+    };
+    open('ws-1', printed);
+
+    // Not the item on screen any more, so the read's error stands.
+    expect(showAsFolder(terminalItem('/tmp/x/hedge'))).toBe(false);
+    expect(showAsFolder(printed)).toBe(true);
+    const folder = useQuickLookStore.getState().session!.item;
+    expect(folder).toEqual({
+      path: '/tmp/x/hedge/',
+      terminalId: 'term-1',
+      source: { kind: 'terminal', fullPath: '/tmp/x/hedge/' },
+      hostPath: '/tmp/x/hedge/',
+    });
+    expect(listViewerFolder).toHaveBeenLastCalledWith('ws-1', 'term-1', folder.source);
+    // Already a folder.
+    expect(showAsFolder(folder)).toBe(false);
+
+    const dots = terminalItem('/tmp/x/..');
+    open('ws-1', dots);
+    expect(showAsFolder(dots)).toBe(false);
+
+    open('ws-1', workspacePrinted);
+    expect(showAsFolder(workspacePrinted)).toBe(true);
+    expect(useQuickLookStore.getState().session!.item).toMatchObject({
+      path: 'out\\hedge/',
+      source: { kind: 'workspace', filePath: 'out/hedge/' },
+    });
+  });
+
   it('lists the files from terminals each once', () => {
     useQuickLookStore.getState().open('ws-1', terminalItem('/tmp/other/x.png'));
 

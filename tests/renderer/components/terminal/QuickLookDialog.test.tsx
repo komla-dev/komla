@@ -63,8 +63,10 @@ import {
   useQuickLookStore,
   type QuickLookItem,
 } from '../../../../src/renderer/stores/quick-look.store';
+import { useTerminalFilesStore } from '../../../../src/renderer/stores/terminal-files.store';
 import { useToastStore } from '../../../../src/renderer/stores/toast.store';
 import { useViewedFileStore } from '../../../../src/renderer/stores/viewed-file.store';
+import { VIEWER_PATH_IS_FOLDER_ERROR } from '../../../../src/shared/types/viewer-file';
 
 const api = {
   readViewerFile: vi.fn(),
@@ -154,6 +156,7 @@ describe('QuickLookDialog', () => {
       layoutsByTab: {},
     });
     useToastStore.setState({ toasts: [] });
+    useTerminalFilesStore.setState(useTerminalFilesStore.getInitialState(), true);
     terminalFiles.listed = [];
     api.readViewerFile.mockImplementation(
       async (_workspaceId: string, _terminalId: string, source: QuickLookItem['source']) => ({
@@ -598,6 +601,45 @@ describe('QuickLookDialog', () => {
     });
     // The workspace itself is no folder to show.
     expect(screen.queryByRole('button', { name: /^Up to/ })).not.toBeInTheDocument();
+  });
+
+  it('shows a folder printed without its trailing slash as a folder', async () => {
+    api.readViewerFile.mockRejectedValue(
+      new Error(
+        `Error invoking remote method 'viewer:read-file': Error: ${VIEWER_PATH_IS_FOLDER_ERROR}, '/tmp/before-after/green-hedge'`
+      )
+    );
+    api.listViewerFolder.mockResolvedValue(listing('after.png'));
+    const printedAs = '/tmp/before-after/green-hedge';
+    useTerminalFilesStore.getState().notePrinted('ws-1', [
+      {
+        path: printedAs,
+        terminalId: 'term-1',
+        target: { type: 'external', fullPath: printedAs },
+        context: { workspaceId: 'ws-1', workspaceBackendKind: 'ssh' },
+        printedAt: 1,
+      },
+    ]);
+    renderViewer();
+    openViewer([terminalItem(printedAs, printedAs)]);
+
+    const contents = await screen.findByRole('list', { name: 'Contents of green-hedge' });
+    expect(await within(contents).findByRole('button', { name: 'after.png' })).toBeVisible();
+    expect(screen.queryByText(/Couldn't show/)).not.toBeInTheDocument();
+    expect(api.listViewerFolder).toHaveBeenLastCalledWith('ws-1', 'term-1', {
+      kind: 'terminal',
+      fullPath: '/tmp/before-after/green-hedge/',
+    });
+    expect(useQuickLookStore.getState().session?.item).toMatchObject({
+      path: '/tmp/before-after/green-hedge/',
+      hostPath: '/tmp/before-after/green-hedge/',
+    });
+    // Recent lists it as the folder too, so the arrows don't step back onto it as a file.
+    expect(
+      useTerminalFilesStore.getState().byWorkspace['ws-1'].map(({ path, target }) => [path, target])
+    ).toEqual([
+      [`${printedAs}/`, { type: 'external', fullPath: `${printedAs}/` }],
+    ]);
   });
 
   it('says when a folder has nothing the viewer can show', async () => {

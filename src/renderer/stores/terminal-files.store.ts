@@ -39,6 +39,11 @@ interface TerminalFilesState {
    */
   byWorkspace: Record<string, TerminalFile[]>;
   /**
+   * The keys of each workspace's paths a read found to be folders though printed without their
+   * trailing slash, so printing or opening them again adds the folder.
+   */
+  foldersByWorkspace: Record<string, ReadonlySet<string>>;
+  /**
    * Adds what terminals printed, newest first. A newer print of a known file moves it to that
    * print's place, with its line and terminal; an untimed one changes nothing.
    */
@@ -53,6 +58,12 @@ interface TerminalFilesState {
    * started is a new entry, which keeps its own state.
    */
   noteChecked: (workspaceId: string, found: Map<TerminalFile, boolean>) => void;
+  /**
+   * Makes the file with this key the folder a read found it to be, as if printed with its
+   * trailing slash, as an agent prints one without it: one entry with the folder printed with it,
+   * at the latest print and open of either, and so too when either is printed or opened again.
+   */
+  noteFolder: (workspaceId: string, key: string) => void;
 }
 
 /** One entry per file: a workspace file by its path, any other by its terminal and path. */
@@ -63,6 +74,34 @@ export function terminalFileKey({
   return target.type === 'workspace'
     ? `workspace:${target.filePath}`
     : `terminal:${terminalId}:${target.fullPath}`;
+}
+
+/** A file as the folder a read found it to be, with the trailing slash a folder has, and no line. */
+function asFolder<T extends Pick<TerminalFile, 'path' | 'target' | 'lineNumber'>>(file: T): T {
+  const { target, lineNumber: _lineNumber, ...rest } = file;
+  return {
+    ...(rest as T),
+    path: `${file.path}/`,
+    target:
+      target.type === 'workspace'
+        ? { ...target, filePath: `${target.filePath}/` }
+        : { ...target, fullPath: `${target.fullPath}/` },
+  };
+}
+
+/** Each of the files, the folder it is when a read found it to be one. */
+function withFolders<T extends Pick<TerminalFile, 'path' | 'target' | 'terminalId'>>(
+  files: T[],
+  folders: ReadonlySet<string> | undefined
+): T[] {
+  return folders
+    ? files.map((file) => (folders.has(terminalFileKey(file)) ? asFolder(file) : file))
+    : files;
+}
+
+/** The later of two times, either unknown. */
+function later(a: number | undefined, b: number | undefined): number | undefined {
+  return a === undefined ? b : b === undefined ? a : Math.max(a, b);
 }
 
 function lastSeen(file: TerminalFile): number {
@@ -95,10 +134,12 @@ function capped(files: TerminalFile[]): TerminalFile[] {
 
 export const useTerminalFilesStore = create<TerminalFilesState>((set) => ({
   byWorkspace: {},
+  foldersByWorkspace: {},
 
-  notePrinted: (workspaceId, prints) => {
-    if (prints.length === 0) return;
-    set(({ byWorkspace }) => {
+  notePrinted: (workspaceId, printed) => {
+    if (printed.length === 0) return;
+    set(({ byWorkspace, foldersByWorkspace }) => {
+      const prints = withFolders(printed, foldersByWorkspace[workspaceId]);
       const files = byWorkspace[workspaceId] ?? [];
       const known = new Map(files.map((file) => [terminalFileKey(file), file]));
       const fresh = new Map<string, TerminalFile>();
@@ -121,12 +162,17 @@ export const useTerminalFilesStore = create<TerminalFilesState>((set) => ({
     });
   },
 
-  noteOpened: (workspaceId, file) => {
-    set(({ byWorkspace }) => {
+  noteOpened: (workspaceId, opening) => {
+    set(({ byWorkspace, foldersByWorkspace }) => {
+      const [file] = withFolders([opening], foldersByWorkspace[workspaceId]);
       const key = terminalFileKey(file);
       const files = byWorkspace[workspaceId] ?? [];
       const known = files.find((candidate) => terminalFileKey(candidate) === key);
-      const opened: TerminalFile = { ...file, printedAt: known?.printedAt, openedAt: Date.now() };
+      const opened: TerminalFile = {
+        ...file,
+        printedAt: known?.printedAt,
+        openedAt: Date.now(),
+      };
       // It keeps its place among the printed files; one never printed goes with the untimed.
       const next = known
         ? files.map((candidate) => (candidate === known ? opened : candidate))
@@ -149,6 +195,52 @@ export const useTerminalFilesStore = create<TerminalFilesState>((set) => ({
         return rest;
       });
       return changed ? { byWorkspace: { ...byWorkspace, [workspaceId]: next } } : {};
+    });
+  },
+
+  noteFolder: (workspaceId, key) => {
+    set(({ byWorkspace, foldersByWorkspace }) => {
+      const files = byWorkspace[workspaceId] ?? [];
+      const file = files.find((candidate) => terminalFileKey(candidate) === key);
+      const known = foldersByWorkspace[workspaceId]?.has(key);
+      if (known && !file) return {};
+      const remembered = known
+        ? {}
+        : {
+            foldersByWorkspace: {
+              ...foldersByWorkspace,
+              [workspaceId]: new Set(foldersByWorkspace[workspaceId]).add(key),
+            },
+          };
+      if (!file) return remembered;
+      const folderKey = terminalFileKey(asFolder(file));
+      const printedWithSlash = files.find((candidate) => terminalFileKey(candidate) === folderKey);
+      // In the place of the one printed last, with its line and terminal, as a newer print takes.
+      const replaced =
+        printedWithSlash && (printedWithSlash.printedAt ?? 0) > (file.printedAt ?? 0)
+          ? printedWithSlash
+          : file;
+      // The read found it, whatever a check said of the file it was taken for.
+      const {
+        missing: _missing,
+        lineNumber: _lineNumber,
+        ...rest
+      } = replaced === file ? asFolder(file) : replaced;
+      const folder: TerminalFile = {
+        ...rest,
+        printedAt: later(file.printedAt, printedWithSlash?.printedAt),
+        openedAt: later(file.openedAt, printedWithSlash?.openedAt),
+      };
+      const next = files
+        .filter(
+          (candidate) =>
+            candidate === replaced || (candidate !== file && candidate !== printedWithSlash)
+        )
+        .map((candidate) => (candidate === replaced ? folder : candidate));
+      return {
+        ...remembered,
+        byWorkspace: { ...byWorkspace, [workspaceId]: next },
+      };
     });
   },
 }));

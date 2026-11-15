@@ -28,6 +28,7 @@ import {
   isLocalTerminalExecutionLocation,
   type TerminalExecutionLocation,
 } from '../../shared/types/terminal';
+import { VIEWER_PATH_IS_FOLDER_ERROR } from '../../shared/types/viewer-file';
 import { isSshWorkspace } from '../../shared/types/workspace';
 import { assertSafeRelativePath } from '../ipc/validation/path-safety';
 import { createLogger } from '../lib/logger';
@@ -141,6 +142,22 @@ async function servableViewerFolder(directory: string, ownFolder: string): Promi
   return servable ? folder : null;
 }
 
+/**
+ * Whether a path ends in `.` or `..`, which name another folder than the one they end, so the
+ * viewer doesn't show one printed without its slash as a folder.
+ */
+function endsInDots(path: string): boolean {
+  return /(^|\/)\.\.?$/.test(path);
+}
+
+/** Whether a path is a folder, through a symlink too. */
+function isFolder(path: string): Promise<boolean> {
+  return stat(path).then(
+    (info) => info.isDirectory(),
+    () => false
+  );
+}
+
 /** Reads a file on this computer for the file viewer, base64-encoded. */
 async function readLocalViewerFile(
   fullPath: string,
@@ -148,6 +165,10 @@ async function readLocalViewerFile(
   followSymlinks: boolean
 ): Promise<string> {
   const info = followSymlinks ? await stat(fullPath) : await lstat(fullPath);
+  // A folder, a symlinked one too, shows as one, as its listing reads through the symlink.
+  if (info.isDirectory() || (info.isSymbolicLink() && (await isFolder(fullPath)))) {
+    throw new Error(`${VIEWER_PATH_IS_FOLDER_ERROR}, '${fullPath}'`);
+  }
   if (info.isSymbolicLink()) throw new Error('Source symlinks are not supported');
   if (!info.isFile()) throw new Error('Source is not a regular file');
   if (info.size > byteCap) throw new Error(`File is too large to view (${info.size} bytes)`);
@@ -1046,7 +1067,8 @@ class WorkspaceFileService {
 
   /**
    * Whether the file viewer can show each path a terminal printed, where the terminal runs: a
-   * readable folder for a path ending in a slash, else a readable file that isn't a symlink. Over
+   * readable folder for a path ending in a slash, else a readable file that isn't a symlink, or a
+   * readable folder, which an agent can print without its slash and the viewer shows. Over
    * SSH the check never prompts; null for a path too long to send, or in a batch the host didn't
    * answer.
    */
@@ -1066,8 +1088,15 @@ class WorkspaceFileService {
         fullPaths.map((fullPath) => {
           const path = expandTerminalHome(fullPath);
           const folder = fullPath.endsWith('/');
+          const slashless = !folder && !endsInDots(fullPath);
           return (folder ? stat(path) : lstat(path))
-            .then((info) => (folder ? info.isDirectory() : info.isFile()))
+            .then(async (info) =>
+              folder
+                ? info.isDirectory()
+                : info.isFile() ||
+                  (slashless &&
+                    (info.isDirectory() || (info.isSymbolicLink() && (await isFolder(path)))))
+            )
             .then((shown) => shown && access(path, fsConstants.R_OK).then(() => true))
             .catch(() => false);
         })
@@ -1075,9 +1104,12 @@ class WorkspaceFileService {
     }
     const tests = fullPaths.map((fullPath) => {
       const path = shellQuoteTerminalPath(fullPath);
+      const file = `[ -f ${path} ] && [ ! -L ${path} ]`;
       const there = fullPath.endsWith('/')
         ? `[ -d ${path} ] && [ -r ${path} ]`
-        : `[ -f ${path} ] && [ ! -L ${path} ] && [ -r ${path} ]`;
+        : endsInDots(fullPath)
+          ? `${file} && [ -r ${path} ]`
+          : `{ [ -d ${path} ] || { ${file}; }; } && [ -r ${path} ]`;
       return `if ${there}; then found="\${found}1"; else found="\${found}0"; fi`;
     });
     const found: (boolean | null)[] = fullPaths.map(() => null);
@@ -1119,6 +1151,8 @@ class WorkspaceFileService {
       this.remoteBase64AvailabilityCheck(),
       `source_path=${shellQuoteTerminalPath(sourcePath)}`,
       `cap=${byteCap}`,
+      // A folder, a symlinked one too, shows as one, as its listing reads through the symlink.
+      'if [ -d "$source_path" ]; then printf "STATUS=FOLDER\\n"; exit 0; fi',
       'if [ -L "$source_path" ]; then printf "STATUS=SYMLINK\\n"; exit 0; fi',
       'if [ ! -f "$source_path" ] || [ ! -r "$source_path" ]; then printf "STATUS=NOT_FOUND\\n"; exit 0; fi',
       'size=$(wc -c <"$source_path" | tr -d " ")',
@@ -1141,6 +1175,7 @@ class WorkspaceFileService {
     if (status === 'NOT_FOUND') {
       throw new Error(`ENOENT: no such readable file, '${sourcePath}'`);
     }
+    if (status === 'FOLDER') throw new Error(`${VIEWER_PATH_IS_FOLDER_ERROR}, '${sourcePath}'`);
     if (status === 'SYMLINK') throw new Error('Source symlinks are not supported');
     if (status === 'TOO_LARGE') {
       throw new Error(`File is too large to view (${values.get('SIZE') ?? 'unknown'} bytes)`);
@@ -1294,6 +1329,7 @@ class WorkspaceFileService {
       'if [ "$parent" = "$file" ]; then parent=.; fi',
       '(',
       ...this.remoteResolveContainedFileScript(),
+      '  if [ -d "$file" ]; then printf "STATUS=FOLDER\\n"; exit 0; fi',
       '  if [ ! -f "$file" ]; then printf "STATUS=NOT_FOUND\\n"; exit 0; fi',
       '  size=$(wc -c <"$file" 2>/dev/null | tr -d " " || printf "0")',
       '  if [ "$size" -gt "$cap" ] 2>/dev/null; then printf "STATUS=TOO_LARGE\\nSIZE=%s\\n" "$size"; exit 0; fi',
@@ -1317,6 +1353,7 @@ class WorkspaceFileService {
     this.assertRemoteEncodingAvailable(values);
     const status = values.get('STATUS');
     if (status === 'NOT_FOUND') throw new Error(`ENOENT: no such file or directory, '${filePath}'`);
+    if (status === 'FOLDER') throw new Error(`${VIEWER_PATH_IS_FOLDER_ERROR}, '${filePath}'`);
     if (status === 'UNSAFE') {
       throw new Error(`Refusing to read path outside the workspace: '${filePath}'`);
     }

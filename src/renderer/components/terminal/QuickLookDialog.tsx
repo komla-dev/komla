@@ -80,11 +80,13 @@ import {
   type QuickLookSession,
 } from '@/stores/quick-look.store';
 import { formatShortcutForDisplay } from '@/stores/shortcuts.store';
+import { useTerminalFilesStore } from '@/stores/terminal-files.store';
 import { useToastStore } from '@/stores/toast.store';
 import { useViewedFile } from '@/stores/viewed-file.store';
 import { useWorkspacesStore } from '@/stores/workspaces.store';
 
 import { getViewableFileKind, type ViewableFileKind } from '../../../shared/image-utils';
+import { VIEWER_PATH_IS_FOLDER_ERROR } from '../../../shared/types/viewer-file';
 
 import { openInFilePanel } from './file-panel';
 import { PaneOutline } from './PaneOutline';
@@ -1133,8 +1135,17 @@ function useViewerRequest<T>(
         if (!cancelled) setResult({ item, loaded: { status: 'loaded', value } });
       },
       (error: unknown) => {
-        if (!cancelled)
-          setResult({ item, loaded: { status: 'error', message: errorMessage(error) } });
+        if (cancelled) return;
+        const message = errorMessage(error);
+        // A folder printed without its trailing slash shows as the folder it is, in Recent too.
+        if (
+          message.startsWith(VIEWER_PATH_IS_FOLDER_ERROR) &&
+          useQuickLookStore.getState().showAsFolder(item)
+        ) {
+          useTerminalFilesStore.getState().noteFolder(workspaceId, quickLookItemKey(item));
+          return;
+        }
+        setResult({ item, loaded: { status: 'error', message } });
       }
     );
     return () => {

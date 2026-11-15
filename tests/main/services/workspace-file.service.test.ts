@@ -22,6 +22,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mockElectron } from '../../mocks/electron';
 
+import { VIEWER_PATH_IS_FOLDER_ERROR } from '../../../src/shared/types/viewer-file';
+
 const {
   configServiceMock,
   execFileMock,
@@ -569,6 +571,11 @@ describe('workspaceFileService', () => {
         workspaceFileService.readViewerFile('ws-local', 'term-local', terminalFile(path));
 
       await expect(read(linkPath)).rejects.toThrow('symlink');
+      await mkdir(join(directory, 'green-hedge'));
+      await symlink(join(directory, 'green-hedge'), join(directory, 'linked-hedge'));
+      for (const folder of ['green-hedge', 'linked-hedge']) {
+        await expect(read(join(directory, folder))).rejects.toThrow(VIEWER_PATH_IS_FOLDER_ERROR);
+      }
       await expect(read(join(directory, 'large.png'))).rejects.toThrow('too large');
       await expect(read(join(directory, 'large.log'))).rejects.toThrow('too large');
       await expect(read(join(directory, 'clip.mp4'))).resolves.toMatchObject({
@@ -627,11 +634,39 @@ describe('workspaceFileService', () => {
     await expect(read('link.png')).rejects.toThrow('symlink');
     await expect(read('large.png')).rejects.toThrow('too large');
     await expect(read('missing.png')).rejects.toThrow('ENOENT');
+    // A folder printed without its trailing slash says it's a folder, so the viewer shows it as one,
+    // through a symlink too, as its listing does.
+    await mkdir(join(directory, 'green-hedge'));
+    await symlink(join(directory, 'green-hedge'), join(directory, 'linked-hedge'));
+    await expect(read('green-hedge')).rejects.toThrow(VIEWER_PATH_IS_FOLDER_ERROR);
+    await expect(read('linked-hedge')).rejects.toThrow(VIEWER_PATH_IS_FOLDER_ERROR);
+  });
+
+  itWithTerminalFiles('says an SSH workspace path printed without its slash is a folder', async () => {
+    const { execFileSync } = await vi.importActual<typeof import('child_process')>('child_process');
+    const remoteDirectory = await realpath(dirname(await createSourceFile('notes.md')));
+    await mkdir(join(remoteDirectory, 'out'));
+    workspaceServiceMock.get.mockReturnValue({
+      ...sshWorkspace,
+      backend: { ...sshWorkspace.backend, remoteDirectory },
+    });
+    sshWorkspaceServiceMock.run.mockImplementation(async (_host, command: string) =>
+      execFileSync('/bin/sh', ['-c', command], { encoding: 'utf8' })
+    );
+    const { workspaceFileService } =
+      await import('../../../src/main/services/workspace-file.service');
+    const read = (filePath: string) =>
+      workspaceFileService.readViewerFile('ws-ssh', 'term-ssh', workspaceFile(filePath));
+
+    await expect(read('notes.md')).resolves.toMatchObject({ data: Buffer.from('contents').toString('base64') });
+    await expect(read('out')).rejects.toThrow(VIEWER_PATH_IS_FOLDER_ERROR);
+    await expect(read('missing.md')).rejects.toThrow('ENOENT');
   });
 
   it.each([
     ['STATUS=NOT_FOUND\n', 'ENOENT'],
     ['STATUS=SYMLINK\n', 'symlink'],
+    ['STATUS=FOLDER\n', VIEWER_PATH_IS_FOLDER_ERROR],
     ['STATUS=TOO_LARGE\nSIZE=9000000\n', 'too large'],
     ['STATUS=ENCODING_UNAVAILABLE\n', 'base64 or openssl'],
   ])('reports a remote terminal file read of %j', async (output, message) => {
@@ -1286,26 +1321,44 @@ describe('workspaceFileService', () => {
       await mkdir(join(directory, 'shots'));
       await symlink(join(directory, 'notes.md'), join(directory, 'linked.md'));
       await symlink(join(directory, 'gone.md'), join(directory, 'dangling.md'));
+      await symlink(join(directory, 'shots'), join(directory, 'linked-shots'));
       await writeFile(join(directory, 'locked.md'), 'contents');
       await chmod(join(directory, 'locked.md'), 0o000);
       // Root reads any file, so a locked one is there for it.
       const readsLocked = process.getuid?.() === 0;
       const { workspaceFileService } =
         await import('../../../src/main/services/workspace-file.service');
-      // As the viewer reads them: a folder by a path ending in a slash, else a file, not a symlink.
+      // As the viewer reads them: a folder by a path ending in a slash, else a file, not a symlink,
+      // or a folder printed without its slash, which the viewer shows as one.
       const paths = [
         join(directory, 'notes.md'),
         join(directory, 'gone.png'),
         `${join(directory, 'shots')}/`,
         `${join(directory, 'notes.md')}/`,
         join(directory, 'shots'),
+        join(directory, 'linked-shots'),
+        // Another folder than the one it ends.
+        `${join(directory, 'shots')}/..`,
         join(directory, 'linked.md'),
         join(directory, 'dangling.md'),
         join(directory, 'locked.md'),
         join(directory, 'gone', 'after.png'),
         "/it's/not/here.png",
       ];
-      const expected = [true, false, true, false, false, false, false, readsLocked, false, false];
+      const expected = [
+        true,
+        false,
+        true,
+        false,
+        true,
+        true,
+        false,
+        false,
+        false,
+        readsLocked,
+        false,
+        false,
+      ];
 
       workspaceServiceMock.get.mockReturnValue(localWorkspace);
       await expect(
