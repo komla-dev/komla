@@ -706,6 +706,12 @@ export const COMMAND_ATTENTION_SOURCE = 'command';
  */
 export const DUPLICATE_WORKSPACE_ERROR_PREFIX = 'DUPLICATE_WORKSPACE:';
 
+/**
+ * What `workspace:update` answers. `trashCleanupFailure` says why Trash cleanup failed when the
+ * workspace moved to the Trash all the same.
+ */
+export type UpdatedWorkspace = Workspace & { trashCleanupFailure?: string };
+
 /** A workspace delete failed because opencode's background service still uses the worktree. */
 export const OPENCODE_HOLDS_WORKTREE_ERROR_PREFIX = 'OPENCODE_HOLDS_WORKTREE:';
 

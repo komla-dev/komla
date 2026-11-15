@@ -54,6 +54,7 @@ import type { RemoteSshWorkspace } from '../../types/ssh-workspace-manifest';
 import type { Terminal } from '../../types/terminal';
 import type {
   Workspace,
+  UpdatedWorkspace,
   WorkspaceCreateBatchResult,
   WorkspaceCreateResult,
 } from '../../types/workspace';
@@ -101,7 +102,7 @@ export const workspaceContract = {
   [IPC.WORKSPACE_DELETE]: invoke(workspaceDeleteArgsSchema).returns<void>(),
   [IPC.WORKSPACE_LIST]: invoke().returns<Workspace[]>(),
   [IPC.WORKSPACE_GET]: invoke(workspaceGetArgsSchema).returns<Workspace | undefined>(),
-  [IPC.WORKSPACE_UPDATE]: invoke(workspaceUpdateArgsSchema).returns<Workspace>(),
+  [IPC.WORKSPACE_UPDATE]: invoke(workspaceUpdateArgsSchema).returns<UpdatedWorkspace>(),
   [IPC.WORKSPACE_REMOVE_MARKER]: invoke(workspaceRemoveMarkerArgsSchema).returns<void>(),
   [IPC.WORKSPACE_KEEP_SCRATCH]: invoke(workspaceKeepScratchArgsSchema).returns<Workspace>(),
   [IPC.WORKSPACE_NOTIFY_CHANGED]: invoke().returns<void>(),

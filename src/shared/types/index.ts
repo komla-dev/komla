@@ -21,6 +21,7 @@ export type {
   Workspace,
   CreateWorkspaceParams,
   WorkspaceCreateError,
+  UpdatedWorkspace,
   WorkspaceCreateResult,
   WorkspaceCreateBatchResult,
   WorkspaceAttention,

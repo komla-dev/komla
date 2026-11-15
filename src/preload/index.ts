@@ -4,6 +4,7 @@ import { IPC } from '../shared/constants/ipc-channels';
 
 import type {
   Workspace,
+  UpdatedWorkspace,
   WorkspaceCreateResult,
   WorkspaceCreateBatchResult,
   WorkspaceObservationProjection,
@@ -320,7 +321,7 @@ const api = {
   getWorkspace: (workspaceId: string): Promise<Workspace | undefined> =>
     ipcRenderer.invoke(IPC.WORKSPACE_GET, workspaceId),
 
-  updateWorkspace: (workspaceId: string, updates: Partial<Workspace>): Promise<Workspace> =>
+  updateWorkspace: (workspaceId: string, updates: Partial<Workspace>): Promise<UpdatedWorkspace> =>
     ipcRenderer.invoke(IPC.WORKSPACE_UPDATE, workspaceId, updates),
 
   /** Takes a marker off as the user does from the card's menu. */

@@ -10,6 +10,7 @@ import {
   DUPLICATE_WORKSPACE_ERROR_PREFIX,
   SshProjectNeedsRemoteError,
   isSshWorkspace,
+  type UpdatedWorkspace,
   type WorkspaceCreateBatchResult,
   type WorkspaceCreateError,
   type WorkspaceCreateResult,
@@ -110,6 +111,7 @@ async function runSimpleRmRfScript(paths: string[], cwd: string): Promise<void> 
     realCwd = cwdPath;
   }
 
+  let failure: unknown;
   for (const path of paths) {
     const target = resolve(cwdPath, path);
     const relativeTarget = relative(cwdPath, target);
@@ -131,15 +133,65 @@ async function runSimpleRmRfScript(paths: string[], cwd: string): Promise<void> 
     if (relativeParent !== '' && (relativeParent.startsWith('..') || isAbsolute(relativeParent))) {
       throw new Error(`Refusing to remove path outside workspace: ${path}`);
     }
-    await removePathInChild(target);
+    // Like `rm -rf a b c`, one path that can't go doesn't keep the rest.
+    try {
+      await removePathInChild(target);
+    } catch (error) {
+      failure ??= error;
+    }
   }
+  if (failure) throw failure;
 }
 
-async function runWorkspaceTrashScript(workspace: Workspace): Promise<void> {
-  if (!workspace.projectId) return;
+function trashCleanupStderr(error: unknown): string {
+  const stderr =
+    error && typeof error === 'object' && 'stderr' in error
+      ? (error as { stderr?: unknown }).stderr
+      : undefined;
+  return typeof stderr === 'string' ? stderr.trim() : '';
+}
+
+const TRASH_CLEANUP_DETAIL_LINES = 3;
+const TRASH_CLEANUP_DETAIL_LENGTH = 300;
+
+/**
+ * Why Trash cleanup failed, short enough for a toast: the end of what the script printed, not
+ * Node's "Command failed: <command line>" with that output again. The log has the rest.
+ */
+function trashCleanupFailureDetail(error: unknown): string {
+  const { killed, code } = (error ?? {}) as { killed?: boolean; code?: unknown };
+  // Whatever it printed before then isn't why it failed.
+  if (killed) return `it ran longer than ${TRASH_SCRIPT_TIMEOUT_MS / 60_000} minutes`;
+  const message = error instanceof Error ? error.message : String(error);
+  // Node puts what the command printed after its "Command failed" line, for one that keeps no
+  // stderr of its own.
+  const printed =
+    trashCleanupStderr(error) ||
+    (message.startsWith('Command failed:') ? message.split('\n').slice(1).join('\n').trim() : '');
+  if (printed) {
+    const lines = printed
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-TRASH_CLEANUP_DETAIL_LINES)
+      .join('\n');
+    return lines.length > TRASH_CLEANUP_DETAIL_LENGTH
+      ? `…${lines.slice(-TRASH_CLEANUP_DETAIL_LENGTH)}`
+      : lines;
+  }
+  if (!message.startsWith('Command failed:')) return message;
+  return typeof code === 'number' ? `it exited with code ${code}` : 'it did not finish';
+}
+
+/**
+ * Runs the project's Trash cleanup in the workspace. Resolves with why it failed, since a broken
+ * script shouldn't keep a workspace the user is done with out of the Trash.
+ */
+async function runWorkspaceTrashScript(workspace: Workspace): Promise<string | undefined> {
+  if (!workspace.projectId) return undefined;
   const project = projectService.get(workspace.projectId);
   const script = project?.trashCleanupScript?.trim();
-  if (!script) return;
+  if (!script) return undefined;
 
   // Directory-mode workspaces point at the user's real project directory, so a
   // destructive cleanup would delete files from there. Skip for safety.
@@ -147,7 +199,7 @@ async function runWorkspaceTrashScript(workspace: Workspace): Promise<void> {
     logger.info(
       `Skipping trash cleanup for ${workspace.id}: workspace is a directory project, not a worktree`
     );
-    return;
+    return undefined;
   }
 
   logger.info(`Running trash cleanup for ${workspace.id} in ${workspace.workingDirectory}`);
@@ -170,20 +222,16 @@ async function runWorkspaceTrashScript(workspace: Workspace): Promise<void> {
       }
     }
     logger.info(`Trash cleanup for ${workspace.id} finished in ${Date.now() - startedAt}ms`);
+    return undefined;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const rawStderr =
-      error && typeof error === 'object' && 'stderr' in error
-        ? (error as { stderr?: unknown }).stderr
-        : undefined;
-    const stderr = typeof rawStderr === 'string' ? rawStderr.trim() : '';
+    const stderr = trashCleanupStderr(error);
     logger.error(
       `Trash cleanup for ${workspace.id} failed after ${Date.now() - startedAt}ms: ${message}${
         stderr ? `\nstderr: ${stderr}` : ''
       }`
     );
-    const detail = stderr ? `${message}\n${stderr}` : message;
-    throw new Error(`Trash cleanup script failed: ${detail}`);
+    return trashCleanupFailureDetail(error);
   }
 }
 
@@ -368,70 +416,76 @@ export function registerWorkspaceHandlers(): void {
     return workspaceService.get(workspaceId);
   });
 
-  handleIpc(IPC.WORKSPACE_UPDATE, async (event, [workspaceId, updates]): Promise<Workspace> => {
-    // Get current workspace state to detect dormancy transitions
-    const currentWorkspace = workspaceService.get(workspaceId);
-    const wasDormant = currentWorkspace?.status !== 'active';
+  handleIpc(
+    IPC.WORKSPACE_UPDATE,
+    async (event, [workspaceId, updates]): Promise<UpdatedWorkspace> => {
+      // Get current workspace state to detect dormancy transitions
+      const currentWorkspace = workspaceService.get(workspaceId);
+      const wasDormant = currentWorkspace?.status !== 'active';
 
-    const isTrashing =
-      currentWorkspace !== undefined &&
-      currentWorkspace.status !== 'trashed' &&
-      updates.status === 'trashed';
+      const isTrashing =
+        currentWorkspace !== undefined &&
+        currentWorkspace.status !== 'trashed' &&
+        updates.status === 'trashed';
 
-    if (isTrashing && currentWorkspace) {
-      // Trusts the watcher's own state, not workspace.status: a window stops the workspace,
-      // and with it the watcher, before it asks for the move.
-      const watcherWasActive =
-        !isSshWorkspace(currentWorkspace) && worktreeWatcherService.isWatching(workspaceId);
-      try {
-        // Main stops it whatever a window's own stop did, and fails the move if it can't: a
-        // workspace is never hidden in the Trash while its agent may run. Stopping also stops
-        // the watcher, so cleanup deleting node_modules or build outputs fires no flood of
-        // changes.
-        await workspaceService.stop(workspaceId);
-        await runWorkspaceTrashScript(currentWorkspace);
-        if (isSshWorkspace(currentWorkspace)) {
-          await localCopyService.remove(workspaceId, currentWorkspace.backend);
-        }
-        // Cleanup can take minutes, and it is still an active workspace until it's done: the
-        // CLI or a schedule may have started a terminal there since.
-        if (startedTerminal(workspaceService.get(workspaceId))) {
+      let trashCleanupFailure: string | undefined;
+      if (isTrashing && currentWorkspace) {
+        // Trusts the watcher's own state, not workspace.status: a window stops the workspace,
+        // and with it the watcher, before it asks for the move.
+        const watcherWasActive =
+          !isSshWorkspace(currentWorkspace) && worktreeWatcherService.isWatching(workspaceId);
+        try {
+          // Main stops it whatever a window's own stop did, and fails the move if it can't: a
+          // workspace is never hidden in the Trash while its agent may run. Stopping also stops
+          // the watcher, so cleanup deleting node_modules or build outputs fires no flood of
+          // changes.
           await workspaceService.stop(workspaceId);
+          trashCleanupFailure = await runWorkspaceTrashScript(currentWorkspace);
+          if (isSshWorkspace(currentWorkspace)) {
+            await localCopyService.remove(workspaceId, currentWorkspace.backend);
+          }
+          // Cleanup can take minutes, and it is still an active workspace until it's done: the
+          // CLI or a schedule may have started a terminal there since.
+          if (startedTerminal(workspaceService.get(workspaceId))) {
+            await workspaceService.stop(workspaceId);
+          }
+        } catch (error) {
+          if (watcherWasActive) {
+            worktreeWatcherService
+              .startWatching(workspaceId, currentWorkspace.workingDirectory)
+              .catch((err) => {
+                console.error(
+                  `Failed to restart watcher after a failed move to the Trash for ${workspaceId}:`,
+                  err
+                );
+              });
+          }
+          throw error;
         }
-      } catch (error) {
-        if (watcherWasActive) {
+        currentWorkspace.setupActivities = undefined;
+      }
+
+      const result = workspaceService.update(workspaceId, updates);
+
+      const isDormant = result.status !== 'active';
+
+      if (wasDormant !== isDormant) {
+        if (isDormant) {
+          worktreeWatcherService.stopWatching(workspaceId).catch((err) => {
+            console.error(`Failed to stop watcher for dormant workspace ${workspaceId}:`, err);
+          });
+        } else {
           worktreeWatcherService
-            .startWatching(workspaceId, currentWorkspace.workingDirectory)
+            .startWatching(workspaceId, result.workingDirectory)
             .catch((err) => {
-              console.error(
-                `Failed to restart watcher after a failed move to the Trash for ${workspaceId}:`,
-                err
-              );
+              console.error(`Failed to start watcher for activated workspace ${workspaceId}:`, err);
             });
         }
-        throw error;
       }
-      currentWorkspace.setupActivities = undefined;
+
+      return trashCleanupFailure ? { ...result, trashCleanupFailure } : result;
     }
-
-    const result = workspaceService.update(workspaceId, updates);
-
-    const isDormant = result.status !== 'active';
-
-    if (wasDormant !== isDormant) {
-      if (isDormant) {
-        worktreeWatcherService.stopWatching(workspaceId).catch((err) => {
-          console.error(`Failed to stop watcher for dormant workspace ${workspaceId}:`, err);
-        });
-      } else {
-        worktreeWatcherService.startWatching(workspaceId, result.workingDirectory).catch((err) => {
-          console.error(`Failed to start watcher for activated workspace ${workspaceId}:`, err);
-        });
-      }
-    }
-
-    return result;
-  });
+  );
 
   handleIpc(IPC.WORKSPACE_REMOVE_MARKER, (_, [workspaceId, key]) => {
     workspaceService.removeMarker(workspaceId, key);

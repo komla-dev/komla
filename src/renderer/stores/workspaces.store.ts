@@ -499,6 +499,33 @@ function reportBulkFailures(
   );
 }
 
+/** Says which workspaces stayed out of the Trash. */
+function reportTrashFailures(set: WorkspacesSet, failures: WorkspaceFailure[]): void {
+  reportBulkFailures(
+    set,
+    failures,
+    trashFailed,
+    (count) => `Failed to move ${count} workspaces to the Trash`
+  );
+}
+
+/**
+ * Says whose Trash cleanup failed. They are in the Trash all the same, with the files cleanup
+ * would have removed still there.
+ */
+function reportTrashCleanupFailures(failures: WorkspaceFailure[]): void {
+  if (failures.length === 0) return;
+  const [{ name, reason }] = failures;
+  useToastStore
+    .getState()
+    .addToast(
+      failures.length === 1
+        ? `Moved ${name} to the Trash, but its Trash cleanup failed: ${reason}`
+        : `Trash cleanup failed for ${failures.length} of the workspaces moved to the Trash. First error: ${reason}`,
+      'error'
+    );
+}
+
 const stopFailed = ({ name, reason }: WorkspaceFailure) =>
   `Failed to stop workspace "${name}": ${reason}`;
 const moveFailed = ({ name, reason }: WorkspaceFailure) =>
@@ -743,16 +770,19 @@ async function finishMovingToTrash(
   let cleanedUp!: () => void;
   trashCleanups = new Promise((resolve) => (cleanedUp = resolve));
   const failures: WorkspaceFailure[] = [];
+  const cleanupFailures: WorkspaceFailure[] = [];
   try {
     await previousCleanup;
     for (const w of workspaces) {
       try {
-        await window.api.updateWorkspace(w.id, { status: 'trashed' });
+        const trashed = await window.api.updateWorkspace(w.id, { status: 'trashed' });
+        const reason = trashed?.trashCleanupFailure;
+        if (reason) cleanupFailures.push({ name: getWorkspaceDisplayTitle(w), reason });
       } catch (error) {
         failures.push({
           workspaceId: w.id,
-          name: w.name,
-          reason: error instanceof Error ? error.message : String(error),
+          name: getWorkspaceDisplayTitle(w),
+          reason: ipcErrorMessage(error),
         });
         // Back in the list, as main still has it, even if the refetch fails.
         settle(w.id, false);
@@ -776,6 +806,7 @@ async function finishMovingToTrash(
     }
   } finally {
     cleanedUp();
+    reportTrashCleanupFailures(cleanupFailures);
   }
   return failures;
 }
@@ -2605,13 +2636,7 @@ const createWorkspacesState: StateCreator<WorkspacesState> = (set, get) => ({
     const ids = new Set(workspaceIds);
     const toTrash = get().workspaces.filter((w) => ids.has(w.id) && w.status !== 'trashed');
     if (toTrash.length === 0) return;
-    const failures = await moveToTrash(set, get, toTrash, { stopsOnlyRunning: true });
-    reportBulkFailures(
-      set,
-      failures,
-      trashFailed,
-      (count) => `Failed to move ${count} workspaces to the Trash`
-    );
+    reportTrashFailures(set, await moveToTrash(set, get, toTrash, { stopsOnlyRunning: true }));
   },
 
   deleteSelectedWorkspaces: async (force = false, deleteBranch = false) => {
@@ -2710,8 +2735,7 @@ const createWorkspacesState: StateCreator<WorkspacesState> = (set, get) => ({
       if (asking && !(await asking)) return;
       const workspace = get().workspaces.find((w) => w.id === workspaceId);
       if (!workspace || workspace.status === 'trashed') return;
-      const [failure] = await moveToTrash(set, get, [workspace]);
-      if (failure) reportFailure(set, failure.reason);
+      reportTrashFailures(set, await moveToTrash(set, get, [workspace]));
       return;
     }
 
@@ -2811,10 +2835,10 @@ const createWorkspacesState: StateCreator<WorkspacesState> = (set, get) => ({
       action: { label: 'Undo', onClick: () => void undo() },
     });
     // The toast shows while the move finishes; one that fails takes its undo back.
-    const [failure] = await moving;
-    if (failure) {
+    const failures = await moving;
+    if (failures.length > 0) {
       toastStore.removeToast(toastId);
-      reportFailure(set, failure.reason);
+      reportTrashFailures(set, failures);
     }
   },
 

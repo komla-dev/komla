@@ -1115,7 +1115,7 @@ describe("workspace IPC behavior", () => {
       expect(mockExecFile).not.toHaveBeenCalled();
     });
 
-    it("does not trash when the cleanup script fails", async () => {
+    it("trashes when the cleanup script fails, and says why it failed", async () => {
       const ipcMain = await setup();
       mockProjectService.get.mockReturnValue({
         id: "proj-1",
@@ -1140,10 +1140,171 @@ describe("workspace IPC behavior", () => {
         isWorktree: true,
       });
 
-      await expect(
-        ipcMain._invoke("workspace:update", "ws-1", { status: "trashed" }),
-      ).rejects.toThrow("Trash cleanup script failed");
-      expect(mockWorkspaceService.update).not.toHaveBeenCalled();
+      mockWorkspaceService.update.mockReturnValue({ id: "ws-1", status: "trashed" });
+
+      const result = await ipcMain._invoke("workspace:update", "ws-1", {
+        status: "trashed",
+      });
+
+      expect(result).toEqual({
+        id: "ws-1",
+        status: "trashed",
+        trashCleanupFailure: "exit 1",
+      });
+    });
+
+    it("reports what the cleanup script printed, without the command line", async () => {
+      const ipcMain = await setup();
+      mockProjectService.get.mockReturnValue({
+        id: "proj-1",
+        trashCleanupScript: "rm -rf node_modules packages/*/dist",
+      });
+      const stderr = "zsh:1: no matches found: packages/*/dist\n";
+      mockExecFile.mockImplementation(
+        (
+          _file: string,
+          _args: string[],
+          _options: unknown,
+          callback: ExecCallback,
+        ) => {
+          callback(
+            Object.assign(
+              new Error(
+                `Command failed: /bin/zsh -l -c rm -rf node_modules packages/*/dist\n${stderr}`,
+              ),
+              { code: 1, stderr },
+            ),
+            "",
+            stderr,
+          );
+        },
+      );
+      mockWorkspaceService.get.mockReturnValue({
+        id: "ws-1",
+        projectId: "proj-1",
+        status: "active",
+        terminals: [],
+        workingDirectory: "/tmp/repo",
+        isWorktree: true,
+      });
+
+      mockWorkspaceService.update.mockReturnValue({ id: "ws-1", status: "trashed" });
+
+      const result = await ipcMain._invoke("workspace:update", "ws-1", {
+        status: "trashed",
+      });
+
+      expect(result.trashCleanupFailure).toBe(
+        "zsh:1: no matches found: packages/*/dist",
+      );
+    });
+
+    it("reports the exit code of a cleanup script that printed nothing", async () => {
+      const ipcMain = await setup();
+      mockProjectService.get.mockReturnValue({
+        id: "proj-1",
+        trashCleanupScript: "npm run cleanup",
+      });
+      mockExecFile.mockImplementation(
+        (
+          _file: string,
+          _args: string[],
+          _options: unknown,
+          callback: ExecCallback,
+        ) => {
+          callback(
+            Object.assign(new Error("Command failed: /bin/zsh -l -c npm run cleanup\n"), {
+              code: 2,
+              stderr: "",
+            }),
+            "",
+            "",
+          );
+        },
+      );
+      mockWorkspaceService.get.mockReturnValue({
+        id: "ws-1",
+        projectId: "proj-1",
+        status: "active",
+        terminals: [],
+        workingDirectory: "/tmp/repo",
+        isWorktree: true,
+      });
+
+      mockWorkspaceService.update.mockReturnValue({ id: "ws-1", status: "trashed" });
+
+      const result = await ipcMain._invoke("workspace:update", "ws-1", {
+        status: "trashed",
+      });
+
+      expect(result.trashCleanupFailure).toBe("it exited with code 2");
+    });
+
+    it("reports a cleanup script that ran too long, whatever it printed", async () => {
+      const ipcMain = await setup();
+      mockProjectService.get.mockReturnValue({
+        id: "proj-1",
+        trashCleanupScript: "npm run cleanup",
+      });
+      mockExecFile.mockImplementation(
+        (
+          _file: string,
+          _args: string[],
+          _options: unknown,
+          callback: ExecCallback,
+        ) => {
+          callback(
+            Object.assign(new Error("Command failed: /bin/zsh -l -c npm run cleanup\n"), {
+              killed: true,
+              stderr: "npm warn deprecated\n",
+            }),
+            "",
+            "",
+          );
+        },
+      );
+      mockWorkspaceService.get.mockReturnValue({
+        id: "ws-1",
+        projectId: "proj-1",
+        status: "active",
+        terminals: [],
+        workingDirectory: "/tmp/repo",
+        isWorktree: true,
+      });
+      mockWorkspaceService.update.mockReturnValue({ id: "ws-1", status: "trashed" });
+
+      const result = await ipcMain._invoke("workspace:update", "ws-1", {
+        status: "trashed",
+      });
+
+      expect(result.trashCleanupFailure).toBe("it ran longer than 15 minutes");
+    });
+
+    it("removes the other paths when one can't go, and reports why", async () => {
+      const ipcMain = await setup();
+      mockProjectService.get.mockReturnValue({
+        id: "proj-1",
+        trashCleanupScript: "rm -rf node_modules dist",
+      });
+      mockWorkspaceService.get.mockReturnValue({
+        id: "ws-1",
+        projectId: "proj-1",
+        status: "active",
+        terminals: [],
+        workingDirectory: "/tmp/repo",
+        isWorktree: true,
+      });
+      mockWorkspaceService.update.mockReturnValue({ id: "ws-1", status: "trashed" });
+      mockRm.mockRejectedValueOnce(
+        new Error("Command failed: node -e remove\nEBUSY: resource busy or locked"),
+      );
+
+      const result = await ipcMain._invoke("workspace:update", "ws-1", {
+        status: "trashed",
+      });
+
+      expect(mockRm).toHaveBeenCalledTimes(2);
+      expect(result.trashCleanupFailure).toBe("EBUSY: resource busy or locked");
     });
 
     it("falls back to shell when an rm path looks like a flag", async () => {
@@ -1203,12 +1364,14 @@ describe("workspace IPC behavior", () => {
         return p;
       });
 
-      await expect(
-        ipcMain._invoke("workspace:update", "ws-1", { status: "trashed" }),
-      ).rejects.toThrow("Trash cleanup script failed");
+      mockWorkspaceService.update.mockReturnValue({ id: "ws-1", status: "trashed" });
+
+      const result = await ipcMain._invoke("workspace:update", "ws-1", {
+        status: "trashed",
+      });
 
       expect(mockRm).not.toHaveBeenCalled();
-      expect(mockWorkspaceService.update).not.toHaveBeenCalled();
+      expect(result.trashCleanupFailure).toEqual(expect.any(String));
     });
 
     it("skips native deletion when the parent directory does not exist", async () => {
@@ -1324,7 +1487,7 @@ describe("workspace IPC behavior", () => {
       expect(mockWorktreeWatcherService.startWatching).not.toHaveBeenCalled();
     });
 
-    it("restarts the watcher when trash cleanup fails and the watcher was active", async () => {
+    it("restarts the watcher when the move to the Trash fails and the watcher was active", async () => {
       const ipcMain = await setup();
       mockProjectService.get.mockReturnValue({
         id: "proj-1",
@@ -1350,9 +1513,11 @@ describe("workspace IPC behavior", () => {
       });
       mockWorktreeWatcherService.isWatching.mockReturnValue(true);
 
+      mockWorkspaceService.stop.mockRejectedValueOnce(new Error("Could not stop"));
+
       await expect(
         ipcMain._invoke("workspace:update", "ws-1", { status: "trashed" }),
-      ).rejects.toThrow("Trash cleanup script failed");
+      ).rejects.toThrow("Could not stop");
 
       expect(mockWorkspaceService.stop).toHaveBeenCalledWith("ws-1");
       expect(mockWorktreeWatcherService.startWatching).toHaveBeenCalledWith(
@@ -1361,7 +1526,7 @@ describe("workspace IPC behavior", () => {
       );
     });
 
-    it("does not restart the watcher when trash cleanup fails if the watcher was already stopped", async () => {
+    it("does not restart the watcher when the move to the Trash fails if the watcher was already stopped", async () => {
       const ipcMain = await setup();
       mockProjectService.get.mockReturnValue({
         id: "proj-1",
@@ -1390,9 +1555,11 @@ describe("workspace IPC behavior", () => {
       });
       mockWorktreeWatcherService.isWatching.mockReturnValue(false);
 
+      mockWorkspaceService.stop.mockRejectedValueOnce(new Error("Could not stop"));
+
       await expect(
         ipcMain._invoke("workspace:update", "ws-1", { status: "trashed" }),
-      ).rejects.toThrow("Trash cleanup script failed");
+      ).rejects.toThrow("Could not stop");
 
       expect(mockWorktreeWatcherService.stopWatching).not.toHaveBeenCalled();
       expect(mockWorktreeWatcherService.startWatching).not.toHaveBeenCalled();

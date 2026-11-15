@@ -42,8 +42,8 @@ beside the agent and the Setup steps' terminals that start again. Other terminal
 so their places go; a pane closed before the stop doesn't come back.
 
 **Trash cleanup**:
-A command that must succeed in the workspace before it moves to the Trash. Success then discards any
-Local copy; failure leaves both the workspace and Local copy intact.
+A command that runs in the workspace before it moves to the Trash, to remove files not worth
+keeping there. A failure is reported, and the workspace moves to the Trash all the same.
 
 **Tag**:
 A label from the user's tag list, such as "In review" or "Blocked", that sorts a workspace by what

@@ -4651,7 +4651,7 @@ describe('workspaces.store', () => {
     it('shows no undo when the move to the Trash failed', async () => {
       const ws = createWorkspace({ id: 'ws-1', customName: 'Fix login', terminals: [] });
       const api = createApiMock({
-        updateWorkspace: vi.fn().mockRejectedValue(new Error('Trash cleanup script failed')),
+        updateWorkspace: vi.fn().mockRejectedValue(new Error('Could not stop the agent')),
         getWorkspaces: vi.fn().mockResolvedValue([ws]),
       });
       (globalThis as { window: { api: ApiMock } }).window = { api };
@@ -4660,7 +4660,7 @@ describe('workspaces.store', () => {
       await useWorkspacesStore.getState().trashWorkspaceWithUndo('ws-1');
 
       expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([
-        'Trash cleanup script failed',
+        'Failed to move Fix login to the Trash: Could not stop the agent',
       ]);
     });
 
@@ -4724,7 +4724,7 @@ describe('workspaces.store', () => {
       expect(useWorkspacesStore.getState().workspaces[0].status).toBe('trashed');
     });
 
-    it('brings a workspace back, without its undo, when Trash cleanup fails after it left the list', async () => {
+    it('brings a workspace back, without its undo, when the move fails after it left the list', async () => {
       const ws = createWorkspace({
         id: 'ws-1',
         customName: 'Fix login',
@@ -4742,12 +4742,12 @@ describe('workspaces.store', () => {
       await flushMicrotasks();
       expect(useWorkspacesStore.getState().workspaces[0].status).toBe('trashed');
 
-      cleanup.reject(new Error('Trash cleanup script failed'));
+      cleanup.reject(new Error('Could not stop the agent'));
       await moving;
 
       expect(useWorkspacesStore.getState().workspaces[0].status).toBe('active');
       expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([
-        'Trash cleanup script failed',
+        'Failed to move Fix login to the Trash: Could not stop the agent',
       ]);
     });
 
@@ -4851,7 +4851,7 @@ describe('workspaces.store', () => {
       const ws = createWorkspace({ id: 'ws-1', terminals: [] });
       const api = createApiMock({
         getWorkspaces: vi.fn().mockResolvedValue([ws]),
-        updateWorkspace: vi.fn().mockRejectedValue(new Error('Trash cleanup script failed')),
+        updateWorkspace: vi.fn().mockRejectedValue(new Error('Could not stop the agent')),
       });
       (globalThis as { window: { api: ApiMock } }).window = { api };
       useWorkspacesStore.setState({ workspaces: [ws], selectedWorkspaceId: 'ws-1' });
@@ -4918,7 +4918,7 @@ describe('workspaces.store', () => {
       const ws = createWorkspace({ id: 'ws-1', terminals: [] });
       const api = createApiMock({
         getWorkspaces: vi.fn().mockResolvedValue([ws]),
-        updateWorkspace: vi.fn().mockRejectedValue(new Error('Trash cleanup script failed')),
+        updateWorkspace: vi.fn().mockRejectedValue(new Error('Could not stop the agent')),
       });
       (globalThis as { window: { api: ApiMock } }).window = { api };
       useWorkspacesStore.setState({ workspaces: [ws], selectedWorkspaceId: 'ws-1' });
@@ -4942,7 +4942,7 @@ describe('workspaces.store', () => {
 
       const moving = useWorkspacesStore.getState().setWorkspaceTrashed('ws-1', true);
       useWorkspacesStore.setState({ showDashboard: true });
-      cleanup.reject(new Error('Trash cleanup script failed'));
+      cleanup.reject(new Error('Could not stop the agent'));
       await moving;
 
       expect(useWorkspacesStore.getState().selectedWorkspaceId).toBeNull();
@@ -5028,11 +5028,17 @@ describe('workspaces.store', () => {
       );
     });
 
-    it('leaves a workspace active when trash cleanup fails', async () => {
-      const ws = createWorkspace({ id: 'ws-1', name: 'Cleanup Test', terminals: [] });
+    it('leaves a workspace active when main cannot move it to the Trash', async () => {
+      const ws = createWorkspace({ id: 'ws-1', name: 'Busy', terminals: [] });
       const api = createApiMock({
         getWorkspaces: vi.fn().mockResolvedValue([ws]),
-        updateWorkspace: vi.fn().mockRejectedValue(new Error('Trash cleanup script failed')),
+        updateWorkspace: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              "Error invoking remote method 'workspace:update': Error: Could not stop the agent"
+            )
+          ),
       });
       (globalThis as { window: { api: ApiMock } }).window = { api };
 
@@ -5040,17 +5046,87 @@ describe('workspaces.store', () => {
 
       await useWorkspacesStore.getState().setWorkspaceTrashed('ws-1', true);
 
+      expect(api.updateWorkspace).toHaveBeenCalledTimes(1);
       expect(useWorkspacesStore.getState().workspaces[0].status).toBe('active');
-      expect(useWorkspacesStore.getState().error).toBe('Trash cleanup script failed');
-      expect(useToastStore.getState().toasts[0]?.message).toBe('Trash cleanup script failed');
+      expect(useWorkspacesStore.getState().error).toBe(
+        'Failed to move Busy to the Trash: Could not stop the agent'
+      );
+      expect(useToastStore.getState().toasts[0]?.message).toBe(
+        'Failed to move Busy to the Trash: Could not stop the agent'
+      );
     });
 
-    it('keeps file-list cache when trash cleanup fails', async () => {
+    it('trashes a workspace whose Trash cleanup fails, and says so', async () => {
+      const ws = createWorkspace({ id: 'ws-1', name: 'Cleanup Test', terminals: [] });
+      const api = createApiMock({
+        getWorkspaces: vi.fn().mockResolvedValue([{ ...ws, status: 'trashed' }]),
+        updateWorkspace: vi
+          .fn()
+          .mockResolvedValue({ ...ws, status: 'trashed', trashCleanupFailure: 'no matches found' }),
+      });
+      (globalThis as { window: { api: ApiMock } }).window = { api };
+      useWorkspacesStore.setState({ workspaces: [ws] });
+
+      await useWorkspacesStore.getState().setWorkspaceTrashed('ws-1', true);
+
+      expect(useWorkspacesStore.getState().workspaces[0].status).toBe('trashed');
+      expect(useToastStore.getState().toasts.map((t) => [t.type, t.message])).toEqual([
+        [
+          'error',
+          'Moved Cleanup Test to the Trash, but its Trash cleanup failed: no matches found',
+        ],
+      ]);
+    });
+
+    it('says once that Trash cleanup failed for several workspaces', async () => {
+      const a = createWorkspace({ id: 'ws-1', name: 'One', terminals: [] });
+      const b = createWorkspace({ id: 'ws-2', name: 'Two', terminals: [] });
+      const api = createApiMock({
+        getWorkspaces: vi.fn().mockResolvedValue([
+          { ...a, status: 'trashed' },
+          { ...b, status: 'trashed' },
+        ]),
+        updateWorkspace: vi
+          .fn()
+          .mockResolvedValue({ ...a, status: 'trashed', trashCleanupFailure: 'no matches found' }),
+      });
+      (globalThis as { window: { api: ApiMock } }).window = { api };
+      useWorkspacesStore.setState({ workspaces: [a, b] });
+
+      await useWorkspacesStore.getState().trashWorkspaces(['ws-1', 'ws-2']);
+
+      expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([
+        'Trash cleanup failed for 2 of the workspaces moved to the Trash. First error: no matches found',
+      ]);
+    });
+
+    it('keeps the undo of a workspace trashed despite a failed Trash cleanup', async () => {
+      const ws = createWorkspace({ id: 'ws-1', customName: 'Fix login', terminals: [] });
+      const api = createApiMock({
+        getWorkspaces: vi.fn().mockResolvedValue([{ ...ws, status: 'trashed' }]),
+        updateWorkspace: vi.fn().mockResolvedValue({
+          ...ws,
+          status: 'trashed',
+          trashCleanupFailure: 'it exited with code 1',
+        }),
+      });
+      (globalThis as { window: { api: ApiMock } }).window = { api };
+      useWorkspacesStore.setState({ workspaces: [ws] });
+
+      await useWorkspacesStore.getState().trashWorkspaceWithUndo('ws-1');
+
+      expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([
+        'Moved "Fix login" to the Trash',
+        'Moved Fix login to the Trash, but its Trash cleanup failed: it exited with code 1',
+      ]);
+    });
+
+    it('keeps file-list cache when the move to the Trash fails', async () => {
       const workingDirectory = '/mock/workspace';
       const ws = createWorkspace({ id: 'ws-1', workingDirectory, terminals: [] });
       const api = createApiMock({
         getWorkspaces: vi.fn().mockResolvedValue([ws]),
-        updateWorkspace: vi.fn().mockRejectedValue(new Error('Trash cleanup script failed')),
+        updateWorkspace: vi.fn().mockRejectedValue(new Error('Could not stop the agent')),
       });
       (globalThis as { window: { api: ApiMock } }).window = { api };
 
@@ -5134,7 +5210,7 @@ describe('workspaces.store', () => {
       expect(useWorkspacesStore.getState().selectionMode).toBe(true);
     });
 
-    it('trashes only successful workspaces in a bulk trash when cleanup fails for one', async () => {
+    it('trashes only successful workspaces in a bulk trash when the move fails for one', async () => {
       const ws1 = createWorkspace({ id: 'ws-1', name: 'Works', terminals: [] });
       const ws2 = createWorkspace({ id: 'ws-2', name: 'Fails', terminals: [] });
       const trashedWs1 = { ...ws1, status: 'trashed' as const };
@@ -5142,7 +5218,7 @@ describe('workspaces.store', () => {
         getWorkspaces: vi.fn().mockResolvedValue([trashedWs1, ws2]),
         updateWorkspace: vi.fn((id: string) =>
           id === 'ws-2'
-            ? Promise.reject(new Error('Trash cleanup script failed'))
+            ? Promise.reject(new Error('Could not stop the agent'))
             : Promise.resolve(undefined)
         ),
       });
@@ -5160,10 +5236,10 @@ describe('workspaces.store', () => {
       expect(updated.find((w) => w.id === 'ws-1')?.status).toBe('trashed');
       expect(updated.find((w) => w.id === 'ws-2')?.status).toBe('active');
       expect(useWorkspacesStore.getState().error).toBe(
-        'Failed to move Fails to the Trash: Trash cleanup script failed'
+        'Failed to move Fails to the Trash: Could not stop the agent'
       );
       expect(useToastStore.getState().toasts[0]?.message).toBe(
-        'Failed to move Fails to the Trash: Trash cleanup script failed'
+        'Failed to move Fails to the Trash: Could not stop the agent'
       );
     });
 
@@ -5185,7 +5261,7 @@ describe('workspaces.store', () => {
         getWorkspaces: vi.fn().mockResolvedValue([trashedWs1, ws2]),
         updateWorkspace: vi.fn((id: string) =>
           id === 'ws-2'
-            ? Promise.reject(new Error('Trash cleanup script failed'))
+            ? Promise.reject(new Error('Could not stop the agent'))
             : Promise.resolve(undefined)
         ),
       });

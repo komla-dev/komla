@@ -67,6 +67,7 @@ export type {
   SshWorkspaceMode,
   Terminal,
   Workspace,
+  UpdatedWorkspace,
   WorkspaceCreateResult,
   WorkspaceCreateBatchResult,
   WorkspaceObservationProjection,
