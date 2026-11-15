@@ -30,6 +30,7 @@
 - A screenshot dragged from the iOS Simulator into the New Workspace dialog now attaches, instead of failing when you launch because the Simulator had already deleted it.
 - A workspace an agent moves to the Trash, for example with `komla trash`, now closes if it's open, instead of staying on screen with nothing running.
 - A link to a folder that an agent prints without a trailing slash now opens the folder, instead of failing with a "Couldn't show" error.
+- A Trash cleanup script that fails no longer keeps the workspace out of the Trash. The workspace is trashed anyway, and a message shows what the script printed instead of the whole command line.
 
 ## [1.1.0]
 
