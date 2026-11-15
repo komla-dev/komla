@@ -16,6 +16,8 @@
 - The workspace card no longer shows a "Connecting…" spinner.
 - A workspace started with `komla launch`, from your phone or by an automation, now shows its project in the sidebar even if you'd hidden it, so you no longer have to search for it.
 - A workspace you opened from the Working shelf moves back into its group as soon as its agent stops, instead of only once you switch away.
+- A file or folder path an agent prints is now a link even without an extension or a trailing slash, as long as it's really there.
+- A link to a file that isn't where the agent said, such as a path from a subfolder or a file that has since moved, opens the file it meant when only one matches, or offers up to six to pick from.
 
 ### Fixes
 
