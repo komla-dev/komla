@@ -61,8 +61,10 @@ import { useEditorSurfaceBackground } from '@/lib/palette-runtime';
 import { getRevealInFileManagerLabel } from '@/lib/platform-labels';
 import { isInPromptDraft } from '@/lib/prompt-draft';
 import { claimShortcutEvent } from '@/lib/shortcut-claims';
+import { isMissingFileError, workspaceFileSuggestions } from '@/lib/suggest-workspace-files';
 import { focusTerminalRenderer } from '@/lib/terminal-renderer-runtime';
 import { cn } from '@/lib/utils';
+import { useFileListStore } from '@/stores/file-list.store';
 import { useFileViewerStore } from '@/stores/file-viewer.store';
 import { useLayoutStore } from '@/stores/layout.store';
 import {
@@ -1096,12 +1098,73 @@ function ViewerStatus({
           <Callout tone="error" size="sm">
             Couldn&apos;t show {name}: {pending.message}
           </Callout>
+          {isMissingFileError(pending.message) && <MissingFileSuggestions item={item} />}
           <HostFileActions item={item} />
         </>
       ) : (
         <Spinner size="md" className="text-muted-foreground" />
       )}
     </div>
+  );
+}
+
+// The most files offered in place of one that isn't there.
+const MAX_SUGGESTED_FILES = 6;
+
+/**
+ * Offers the workspace's files that a workspace path that isn't there may have meant, as an
+ * agent prints a path from a folder inside the workspace, or of a file since moved.
+ */
+function MissingFileSuggestions({ item }: { item: QuickLookItem }) {
+  const workspaceId = useQuickLookStore((s) => s.session?.workspaceId);
+  const workingDirectory = useWorkspacesStore(
+    (s) => s.workspaces.find((w) => w.id === workspaceId)?.workingDirectory
+  );
+  const list = useFileListStore((s) =>
+    workingDirectory ? s.cache.get(workingDirectory) : undefined
+  );
+  const filePath = item.source.kind === 'workspace' ? item.source.filePath : null;
+  useEffect(() => {
+    if (filePath === null || !workingDirectory || !workspaceId) return;
+    useFileListStore
+      .getState()
+      .fetchFileListIfNeeded(workingDirectory, workspaceId)
+      .catch(() => {});
+  }, [filePath, workingDirectory, workspaceId]);
+  const paths = useMemo(
+    () =>
+      filePath === null
+        ? []
+        : (workspaceFileSuggestions(list, filePath)?.paths.slice(0, MAX_SUGGESTED_FILES) ?? []),
+    [filePath, list]
+  );
+  if (filePath === null || !workspaceId || paths.length === 0) return null;
+
+  const hostRoot = item.hostPath?.endsWith(`/${filePath}`)
+    ? item.hostPath.slice(0, -filePath.length)
+    : undefined;
+  return (
+    <section aria-label="Did you mean" className="flex flex-col items-center gap-2">
+      <div className="text-xs text-muted-foreground">Did you mean</div>
+      {paths.map((path) => (
+        <Button
+          key={path}
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            useQuickLookStore.getState().open(workspaceId, {
+              path,
+              terminalId: item.terminalId,
+              source: { kind: 'workspace', filePath: path },
+              ...(hostRoot ? { hostPath: `${hostRoot}${path}` } : {}),
+              ...(item.lineNumber !== undefined ? { lineNumber: item.lineNumber } : {}),
+            })
+          }
+        >
+          {path}
+        </Button>
+      ))}
+    </section>
   );
 }
 

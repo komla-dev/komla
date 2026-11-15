@@ -61,6 +61,12 @@ import { executeShortcutAction } from '@/lib/shortcut-actions';
 import { consumeTreeDragActive, isTreeDragActive, setTreeDragActive } from '@/lib/tree-drag-token';
 import { useWorkspacesStore } from '@/stores/workspaces.store';
 
+import { forgetTerminalPathChecks } from '../../../../src/renderer/components/terminal/terminal-path-check';
+import { useFileListStore } from '../../../../src/renderer/stores/file-list.store';
+import { useFileViewerStore } from '../../../../src/renderer/stores/file-viewer.store';
+import { useQuickLookStore } from '../../../../src/renderer/stores/quick-look.store';
+import { useTerminalFilesStore } from '../../../../src/renderer/stores/terminal-files.store';
+import { useToastStore } from '../../../../src/renderer/stores/toast.store';
 import { stripTerminalFocusReports } from '../../../../src/shared/lib/terminal-escape';
 import { createSshWorkspace } from '../../../factories';
 
@@ -69,7 +75,9 @@ import {
   getAltArrowWordJumpInput,
   getTerminalClipboardShortcutAction,
   isTerminalTypingKey,
+  openTerminalFileLink,
   pasteClipboardIntoTerminal,
+  resolveTerminalFileLink,
   resolveTerminalFileOpenTarget,
   resolveTerminalUrlOpenTarget,
   shortcutKeyMatches,
@@ -957,5 +965,212 @@ describe('terminal clipboard image fallback', () => {
 
     expect(api.importClipboardImage).not.toHaveBeenCalled();
     expect(api.sendInput).not.toHaveBeenCalled();
+  });
+});
+
+describe('openTerminalFileLink for a workspace file the file list does not have', () => {
+  const context = {
+    workspaceId: 'ws-1',
+    workspaceRoot: '/repo',
+    workingDirectory: '/repo',
+    workspaceBackendKind: 'local' as const,
+  };
+  const readViewerFile = vi.fn();
+  const missing = () =>
+    new Error(
+      "Error invoking remote method 'viewer:read': Error: ENOENT: no such file or directory"
+    );
+  const requestInlineFilePreviewNav = vi.fn();
+  const open = (rawPath: string, lineNumber?: number) =>
+    openTerminalFileLink(
+      rawPath,
+      lineNumber,
+      resolveTerminalFileLink(rawPath, context, 'linux'),
+      't1',
+      context
+    );
+  const toasts = () => useToastStore.getState().toasts.map((toast) => toast.message);
+
+  beforeEach(() => {
+    forgetTerminalPathChecks();
+    readViewerFile.mockReset();
+    readViewerFile.mockImplementation(async () => {
+      throw missing();
+    });
+    useWorkspacesStore.setState({ selectedWorkspaceId: 'ws-1' });
+    requestInlineFilePreviewNav.mockReset();
+    Object.defineProperty(window, 'api', {
+      value: {
+        platform: 'linux',
+        readViewerFile,
+        listViewerFolder: vi.fn(async () => []),
+      },
+      configurable: true,
+      writable: true,
+    });
+    useToastStore.setState({ toasts: [] });
+    useQuickLookStore.setState({ session: null });
+    useTerminalFilesStore.setState(useTerminalFilesStore.getInitialState(), true);
+    useFileViewerStore.setState({
+      fileViewerWorkspaceId: null,
+      requestInlineFilePreviewNav,
+    });
+    useFileListStore.setState({
+      cache: new Map([
+        [
+          '/repo',
+          {
+            files: [
+              'src/main.ts',
+              'packages/app/src/lib/paths.ts',
+              'packages/app/src/index.ts',
+              'packages/web/src/index.ts',
+              'docs/setup.md',
+            ],
+            gitIgnoredFiles: [],
+            emptyDirs: [],
+            isLoading: false,
+          },
+        ],
+      ]),
+    });
+  });
+
+  it('opens the one listed file that ends with the path, and says so', async () => {
+    open('src/lib/paths.ts', 12);
+
+    await vi.waitFor(() => expect(requestInlineFilePreviewNav).toHaveBeenCalled());
+    expect(readViewerFile).toHaveBeenCalledWith('ws-1', 't1', {
+      kind: 'workspace',
+      filePath: 'src/lib/paths.ts',
+    });
+    expect(requestInlineFilePreviewNav).toHaveBeenCalledWith(
+      'ws-1',
+      'browse',
+      'packages/app/src/lib/paths.ts',
+      12,
+      { browseTree: true }
+    );
+    expect(toasts()).toEqual([
+      "Opened packages/app/src/lib/paths.ts, as src/lib/paths.ts isn't in this workspace",
+    ]);
+    expect(useTerminalFilesStore.getState().byWorkspace['ws-1'].map((file) => file.path)).toEqual([
+      'packages/app/src/lib/paths.ts',
+    ]);
+  });
+
+  it('opens the file as printed when a read finds it, or fails some other way', async () => {
+    readViewerFile.mockResolvedValueOnce({ data: '', mimeType: 'text/plain' });
+    open('src/lib/paths.ts');
+    await vi.waitFor(() =>
+      expect(requestInlineFilePreviewNav).toHaveBeenLastCalledWith(
+        'ws-1',
+        'browse',
+        'src/lib/paths.ts',
+        undefined,
+        { browseTree: true }
+      )
+    );
+
+    readViewerFile.mockRejectedValueOnce(new Error('offline'));
+    open('lib/paths.ts');
+    await vi.waitFor(() =>
+      expect(requestInlineFilePreviewNav).toHaveBeenLastCalledWith(
+        'ws-1',
+        'browse',
+        'lib/paths.ts',
+        undefined,
+        { browseTree: true }
+      )
+    );
+    expect(toasts()).toEqual([]);
+  });
+
+  it('leaves the choice to the viewer when several files end with the path, or one may have moved', async () => {
+    open('src/index.ts');
+    await vi.waitFor(() =>
+      expect(useQuickLookStore.getState().session?.item.source).toEqual({
+        kind: 'workspace',
+        filePath: 'src/index.ts',
+      })
+    );
+
+    useQuickLookStore.setState({ session: null });
+    open('guides/setup.md');
+    await vi.waitFor(() =>
+      expect(useQuickLookStore.getState().session?.item.source).toEqual({
+        kind: 'workspace',
+        filePath: 'guides/setup.md',
+      })
+    );
+    expect(requestInlineFilePreviewNav).not.toHaveBeenCalled();
+    expect(toasts()).toEqual([]);
+  });
+
+  it('opens a listed file, or one no listed file is named like, at once without a read', () => {
+    open('src/main.ts');
+    open('src/brand-new.ts');
+
+    expect(requestInlineFilePreviewNav.mock.calls.map((call) => call[2])).toEqual([
+      'src/main.ts',
+      'src/brand-new.ts',
+    ]);
+    expect(readViewerFile).not.toHaveBeenCalled();
+  });
+
+  it('opens it once when clicked again before the read answers', async () => {
+    open('src/lib/paths.ts', 10);
+    open('src/lib/paths.ts', 88);
+
+    await vi.waitFor(() => expect(requestInlineFilePreviewNav).toHaveBeenCalled());
+    // At the line clicked last.
+    expect(requestInlineFilePreviewNav.mock.calls[0][3]).toBe(88);
+    expect(readViewerFile).toHaveBeenCalledTimes(1);
+    expect(requestInlineFilePreviewNav).toHaveBeenCalledTimes(1);
+    expect(toasts()).toHaveLength(1);
+
+    open('src/lib/paths.ts');
+    await vi.waitFor(() => expect(requestInlineFilePreviewNav).toHaveBeenCalledTimes(2));
+  });
+
+  it('counts a path through a file as missing', async () => {
+    readViewerFile.mockRejectedValueOnce(
+      new Error("ENOTDIR: not a directory, stat '/repo/src/lib/paths.ts'")
+    );
+    open('src/lib/paths.ts');
+
+    await vi.waitFor(() => expect(toasts()).toHaveLength(1));
+  });
+
+  it('opens nothing once another workspace is on screen', async () => {
+    let fail: (error: Error) => void = () => {};
+    readViewerFile.mockImplementationOnce(() => new Promise((_resolve, reject) => (fail = reject)));
+    open('src/lib/paths.ts');
+    useWorkspacesStore.setState({ selectedWorkspaceId: 'ws-2' });
+    fail(missing());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requestInlineFilePreviewNav).not.toHaveBeenCalled();
+    expect(toasts()).toEqual([]);
+    expect(useQuickLookStore.getState().session).toBeNull();
+  });
+
+  it('suggests no file for a path in a linked workspace', () => {
+    useFileListStore.setState({
+      cache: new Map([
+        [
+          '/repo',
+          {
+            files: ['src/main.ts'],
+            gitIgnoredFiles: [],
+            emptyDirs: [],
+            isLoading: false,
+          },
+        ],
+      ]),
+    });
+    open('linked-workspaces/api/src/main.ts');
+
+    expect(readViewerFile).not.toHaveBeenCalled();
   });
 });

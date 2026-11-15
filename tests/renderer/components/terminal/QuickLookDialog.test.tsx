@@ -56,6 +56,7 @@ vi.mock('@/components/workspaces/file-viewer/EditorPane', async () => {
 import { QuickLookDialog } from '../../../../src/renderer/components/terminal/QuickLookDialog';
 import { TooltipProvider } from '../../../../src/renderer/components/ui/tooltip';
 import { isShortcutEventClaimed } from '../../../../src/renderer/lib/shortcut-claims';
+import { useFileListStore } from '../../../../src/renderer/stores/file-list.store';
 import { useFileViewerStore } from '../../../../src/renderer/stores/file-viewer.store';
 import { useLayoutStore } from '../../../../src/renderer/stores/layout.store';
 import { usePromptDraftStore } from '../../../../src/renderer/stores/prompt-draft.store';
@@ -66,6 +67,7 @@ import {
 import { useTerminalFilesStore } from '../../../../src/renderer/stores/terminal-files.store';
 import { useToastStore } from '../../../../src/renderer/stores/toast.store';
 import { useViewedFileStore } from '../../../../src/renderer/stores/viewed-file.store';
+import { useWorkspacesStore } from '../../../../src/renderer/stores/workspaces.store';
 import { VIEWER_PATH_IS_FOLDER_ERROR } from '../../../../src/shared/types/viewer-file';
 
 const api = {
@@ -157,6 +159,8 @@ describe('QuickLookDialog', () => {
     });
     useToastStore.setState({ toasts: [] });
     useTerminalFilesStore.setState(useTerminalFilesStore.getInitialState(), true);
+    useFileListStore.setState({ cache: new Map() });
+    useWorkspacesStore.setState({ workspaces: [] });
     terminalFiles.listed = [];
     api.readViewerFile.mockImplementation(
       async (_workspaceId: string, _terminalId: string, source: QuickLookItem['source']) => ({
@@ -815,6 +819,118 @@ describe('QuickLookDialog', () => {
       { browseTree: true }
     );
     expect(useQuickLookStore.getState().session).toBeNull();
+  });
+
+  it('offers the files a workspace path that is not there may have meant', async () => {
+    useWorkspacesStore.setState({
+      workspaces: [{ id: 'ws-1', workingDirectory: '/repo' }] as never,
+    });
+    useFileListStore.setState({
+      cache: new Map([
+        [
+          '/repo',
+          {
+            files: ['packages/app/out/b.png', 'packages/web/out/b.png', 'out/c.png'],
+            gitIgnoredFiles: [],
+            emptyDirs: [],
+            isLoading: false,
+          },
+        ],
+      ]),
+    });
+    api.readViewerFile.mockImplementation(
+      async (_w: string, _t: string, source: QuickLookItem['source']) => {
+        if (source.kind === 'workspace' && source.filePath === 'out/b.png') {
+          throw new Error("ENOENT: no such file or directory, stat '/repo/out/b.png'");
+        }
+        return { data: base64('found'), mimeType: 'image/png' };
+      }
+    );
+    const user = userEvent.setup();
+    renderViewer();
+    openViewer([{ ...images[1], hostPath: '/repo/out/b.png', lineNumber: 4 }]);
+
+    const choices = await screen.findByRole('region', { name: 'Did you mean' });
+    expect(
+      within(choices)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['packages/app/out/b.png', 'packages/web/out/b.png']);
+    await user.click(within(choices).getByRole('button', { name: 'packages/web/out/b.png' }));
+
+    expect(useQuickLookStore.getState().session?.item).toEqual({
+      path: 'packages/web/out/b.png',
+      terminalId: 'term-1',
+      source: { kind: 'workspace', filePath: 'packages/web/out/b.png' },
+      hostPath: '/repo/packages/web/out/b.png',
+      lineNumber: 4,
+    });
+    expect(await screen.findByRole('img')).toBeInTheDocument();
+  });
+
+  it('offers no other file for a path outside the workspace, or a read that failed otherwise', async () => {
+    useWorkspacesStore.setState({
+      workspaces: [{ id: 'ws-1', workingDirectory: '/repo' }] as never,
+    });
+    useFileListStore.setState({
+      cache: new Map([
+        [
+          '/repo',
+          {
+            files: ['x/a.png', 'x/out/b.png'],
+            gitIgnoredFiles: [],
+            emptyDirs: [],
+            isLoading: false,
+          },
+        ],
+      ]),
+    });
+    api.readViewerFile.mockRejectedValueOnce(
+      new Error("ENOENT: no such readable file, '/tmp/shots/a.png'")
+    );
+    renderViewer();
+    openViewer([images[0]]);
+    expect(await screen.findByText(/no such readable file/)).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Did you mean' })).not.toBeInTheDocument();
+
+    api.readViewerFile.mockRejectedValueOnce(new Error('File is too large to view (9 bytes)'));
+    act(() => useQuickLookStore.getState().open('ws-1', images[1]));
+    expect(await screen.findByText(/too large to view/)).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Did you mean' })).not.toBeInTheDocument();
+  });
+
+  it('offers no file of this workspace for a path in a linked workspace', async () => {
+    useWorkspacesStore.setState({
+      workspaces: [{ id: 'ws-1', workingDirectory: '/repo' }] as never,
+    });
+    useFileListStore.setState({
+      cache: new Map([
+        [
+          '/repo',
+          {
+            files: ['out/b.png'],
+            gitIgnoredFiles: [],
+            emptyDirs: [],
+            isLoading: false,
+          },
+        ],
+      ]),
+    });
+    api.readViewerFile.mockRejectedValueOnce(new Error('ENOENT: no such file or directory'));
+    renderViewer();
+    openViewer([
+      {
+        path: 'linked-workspaces/api/out/b.png',
+        terminalId: 'term-1',
+        source: {
+          kind: 'workspace',
+          filePath: 'linked-workspaces/api/out/b.png',
+        },
+      },
+    ]);
+
+    expect(await screen.findByText(/no such file/)).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Did you mean' })).not.toBeInTheDocument();
   });
 
   it('opens a workspace file in the full viewer while that covers the file panel', async () => {

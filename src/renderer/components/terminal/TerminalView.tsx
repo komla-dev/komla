@@ -6,6 +6,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { getDetector, configKeyToEventKey } from '@/lib/double-tap-detector';
 import { hasFileDrop, uploadingLabel } from '@/lib/file-drop';
 import { importFilesAsReferences, refreshFileListAfterImport } from '@/lib/file-imports';
+import { ipcErrorMessage } from '@/lib/ipc-error-message';
 import { openTerminalUrl } from '@/lib/open-terminal-url';
 import {
   buildTerminalTheme,
@@ -14,6 +15,11 @@ import {
 } from '@/lib/palette-runtime';
 import { notePrintedHyperlink } from '@/lib/recent-links';
 import { executeShortcutAction, registerShortcutAction } from '@/lib/shortcut-actions';
+import {
+  isMissingFileError,
+  workspaceFileSuggestions,
+  type WorkspaceFileSuggestions,
+} from '@/lib/suggest-workspace-files';
 import { decodeOsc52Clipboard } from '@/lib/terminal-osc-clipboard';
 import {
   attachTerminalRenderer,
@@ -52,6 +58,7 @@ import {
 import { useTerminalSearchStore } from '@/stores/terminal-search.store';
 import { useToastStore } from '@/stores/toast.store';
 import { useVoiceStore } from '@/stores/voice.store';
+import { useWorkspacesStore } from '@/stores/workspaces.store';
 
 import { isNewWorkspaceDialogShortcut } from '../../../shared/constants/shortcut-scopes';
 import { buildTerminalFontFamily } from '../../../shared/constants/terminal';
@@ -367,6 +374,112 @@ export function openTerminalFileLink(
     }
     return;
   }
+  if (target.type === 'workspace' && !isFolderPath(target.filePath)) {
+    const suggestions = unlistedFileSuggestions(context, target.filePath);
+    if (suggestions) {
+      void openUnlistedFileLink(
+        workspaceId,
+        rawPath,
+        lineNumber,
+        target,
+        terminalId,
+        context,
+        suggestions
+      );
+      return;
+    }
+  }
+  openResolvedFileLink(workspaceId, rawPath, lineNumber, target, terminalId, context);
+}
+
+/**
+ * The listed files a workspace path the file list doesn't have may have meant, or null when it
+ * suggests none.
+ */
+function unlistedFileSuggestions(
+  context: TerminalFileLinkContext,
+  filePath: string
+): WorkspaceFileSuggestions | null {
+  return workspaceFileSuggestions(
+    context.workingDirectory
+      ? useFileListStore.getState().getFileList(context.workingDirectory)
+      : undefined,
+    filePath
+  );
+}
+
+// The unlisted files being read to see whether they are there, by workspace and path, each with
+// the line its link was last clicked at.
+const readingUnlisted = new Map<string, { rawPath: string; lineNumber: number | undefined }>();
+
+/**
+ * Opens a link to a workspace file the file list doesn't have. The list can be behind, so the
+ * file opens as printed unless reading it says it isn't there. Then the one listed file that
+ * ends with the whole path opens in its place, as an agent prints a path from a folder inside
+ * the workspace, and the viewer offers the suggestions when there are several or the file may
+ * have moved. Clicking again while the read runs opens it once, at the line clicked last, and a
+ * read that answers once another workspace is on screen opens nothing.
+ */
+async function openUnlistedFileLink(
+  workspaceId: string,
+  printedPath: string,
+  clickedLine: number | undefined,
+  target: TerminalFileOpenTarget & { type: 'workspace' },
+  terminalId: string,
+  context: TerminalFileLinkContext,
+  suggestions: WorkspaceFileSuggestions
+): Promise<void> {
+  const reading = `${workspaceId}\n${target.filePath}`;
+  const alreadyReading = readingUnlisted.has(reading);
+  readingUnlisted.set(reading, { rawPath: printedPath, lineNumber: clickedLine });
+  if (alreadyReading) return;
+  let missing = false;
+  try {
+    await window.api.readViewerFile(workspaceId, terminalId, {
+      kind: 'workspace',
+      filePath: target.filePath,
+    });
+  } catch (error) {
+    missing = isMissingFileError(ipcErrorMessage(error));
+  }
+  const { rawPath, lineNumber } = readingUnlisted.get(reading) ?? {
+    rawPath: printedPath,
+    lineNumber: clickedLine,
+  };
+  readingUnlisted.delete(reading);
+  if (useWorkspacesStore.getState().selectedWorkspaceId !== workspaceId) return;
+  if (!missing) {
+    openResolvedFileLink(workspaceId, rawPath, lineNumber, target, terminalId, context);
+    return;
+  }
+  if (suggestions.whole && suggestions.paths.length === 1) {
+    const [filePath] = suggestions.paths;
+    useToastStore
+      .getState()
+      .addToast(`Opened ${filePath}, as ${target.filePath} isn't in this workspace`, 'info');
+    openResolvedFileLink(
+      workspaceId,
+      filePath,
+      lineNumber,
+      { type: 'workspace', filePath },
+      terminalId,
+      context
+    );
+    return;
+  }
+  useQuickLookStore
+    .getState()
+    .open(workspaceId, terminalLinkViewerItem(rawPath, lineNumber, target, terminalId, context));
+}
+
+function openResolvedFileLink(
+  workspaceId: string,
+  rawPath: string,
+  lineNumber: number | undefined,
+  target: TerminalFileOpenTarget,
+  terminalId: string,
+  context: TerminalFileLinkContext
+): void {
   useTerminalFilesStore
     .getState()
     .noteOpened(workspaceId, { path: rawPath, lineNumber, terminalId, target, context });
