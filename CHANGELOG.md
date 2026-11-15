@@ -4,7 +4,7 @@
 
 ### New
 
-- **Scratch workspaces.** Start an agent for a quick one-off, like a throwaway script or trying an idea, without picking a project or making a folder first. New Scratch Workspace is in Quick create, the sidebar's Scratch group and the New Workspace dialog's project list. Its folder is cleaned up when the workspace is deleted for good, unless you choose Keep Folder.
+- **Scratch workspaces.** Start an agent for a quick one-off, like a throwaway script or trying an idea, without picking a project or making a folder first. New Scratch Workspace is in Quick create and the sidebar's Scratch group, or pick it in the New Workspace dialog's project list to write the prompt and choose the agent before you launch. Its folder is cleaned up when the workspace is deleted for good, unless you choose Keep Folder.
 - **File tree actions in the header.** A new button in the file tree's header opens Expand All, Collapse All and Rollback All Changes, so you no longer have to right-click a sliver of empty space to find them.
 
 ### Improvements
@@ -27,6 +27,8 @@
 - After switching environment in the New Workspace dialog, Enter now launches the workspace instead of switching the environment back.
 - A workspace moved to the Trash is always stopped first, so the Trash no longer holds workspaces that are still running.
 - An SSH workspace that's missing from its host no longer shows "Failed to create SSH workspace" again every time it changes.
+- A screenshot dragged from the iOS Simulator into the New Workspace dialog now attaches, instead of failing when you launch because the Simulator had already deleted it.
+- A workspace an agent moves to the Trash, for example with `komla trash`, now closes if it's open, instead of staying on screen with nothing running.
 
 ## [1.1.0]
 
