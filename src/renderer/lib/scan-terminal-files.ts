@@ -31,7 +31,9 @@ export function scanWorkspaceTerminalsForFiles(
   )) {
     for (let i = logicalLines.length - 1; i >= 0; i--) {
       if (!logicalLines[i]) continue;
-      for (const { path, lineNumber } of findFileLinksInText(logicalLines[i])) {
+      for (const { path, lineNumber, unconfirmed } of findFileLinksInText(logicalLines[i])) {
+        // A path with no extension is only a link once found: a shell prompt prints one each line.
+        if (unconfirmed) continue;
         files.push({
           terminalId,
           path,

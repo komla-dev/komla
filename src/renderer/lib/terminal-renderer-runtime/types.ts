@@ -19,6 +19,11 @@ export interface TerminalRendererCallbacks {
     lineNumber?: number,
     columnNumber?: number
   ) => void;
+  /**
+   * Says whether each path the terminal shows is there, for a path that only links once it is,
+   * as its name has no extension.
+   */
+  confirmFilePaths?: (paths: string[]) => Promise<boolean[]>;
   onLinkHover?: (link: TerminalDetectedLink | null, terminalElement?: HTMLElement) => void;
   /** The target of each OSC 8 hyperlink the terminal prints. */
   onHyperlinkPrinted?: (uri: string) => void;

@@ -17,6 +17,10 @@ const FILE_PATH_REGEX =
 // ends a sentence only when no path follows, as /.claude/ continues one.
 const FOLDER_PATH_REGEX =
   /(^|[\s([{"'`])((?:(?:[A-Za-z]:)?[\\/]|\.{1,2}[\\/]|~[\\/])?(?:[A-Za-z0-9_@+.-]+[\\/])+)(?=$|[\s)\]}"'`,;:!?]|\.(?![A-Za-z0-9_@+.\\/-]))/g;
+// A path from a root, ./ or ~/ with a folder in it, whose name may have no extension, such as
+// /tmp/shots/proof or ./bin/run. Only a check where the terminal runs tells one from a route.
+const ROOTED_PATH_REGEX =
+  /(^|[\s([{"'`])((?:(?:[A-Za-z]:)?[\\/]|\.[\\/]|~[\\/])(?:[A-Za-z0-9_@+.-]+[\\/])+[A-Za-z0-9_@+.-]+)(?![A-Za-z0-9_@+.\\/-])(?::([1-9]\d*)(?::([1-9]\d*))?)?/g;
 // A first folder named like a domain, as in github.com/user/repo/.
 const DOMAIN_START_REGEX = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+[\\/]/;
 const CONTINUATION_START_REGEX = /[/?#&=._~:%+-]/;
@@ -58,6 +62,8 @@ export type TerminalDetectedLink =
   | { type: 'url'; url: string }
   | { type: 'file'; filePath: string; lineNumber?: number; columnNumber?: number };
 type LinkHoverHandler = (link: TerminalDetectedLink | null) => void;
+/** Says whether each path, as printed, is there where the terminal runs. */
+export type FilePathConfirmer = (paths: string[]) => Promise<boolean[]>;
 
 interface BufferPosition {
   x: number;
@@ -133,12 +139,13 @@ export class WrappedFileLinksAddon implements ITerminalAddon {
 
   constructor(
     private readonly handler: FileLinkHandler,
-    private readonly onHover?: LinkHoverHandler
+    private readonly onHover?: LinkHoverHandler,
+    private readonly confirm?: FilePathConfirmer
   ) {}
 
   activate(terminal: Terminal): void {
     this.disposable = terminal.registerLinkProvider(
-      new WrappedFileLinkProvider(terminal, this.handler, this.onHover)
+      new WrappedFileLinkProvider(terminal, this.handler, this.onHover, this.confirm)
     );
   }
 
@@ -165,15 +172,55 @@ export class WrappedFileLinkProvider implements ILinkProvider {
   constructor(
     private readonly terminal: TerminalLike,
     private readonly handler: FileLinkHandler,
-    private readonly onHover?: LinkHoverHandler
+    private readonly onHover?: LinkHoverHandler,
+    /** Without it, a path that needs confirming is not linked. */
+    private readonly confirm?: FilePathConfirmer
   ) {}
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
-    callback(
-      computeWrappedFileLinks(this.terminal, bufferLineNumber - 1, this.handler, this.onHover)
+    const read = () =>
+      wrappedFileLinks(this.terminal, bufferLineNumber - 1, this.handler, this.onHover);
+    const found = read();
+    const sure = found.filter(({ unconfirmed }) => !unconfirmed);
+    const unsure = found.filter(({ unconfirmed }) => unconfirmed);
+    const links = (from: WrappedFileLink[]) => from.map(({ link }) => link);
+    if (!this.confirm || unsure.length === 0) {
+      callback(links(sure));
+      return;
+    }
+    let given = false;
+    const give = (from: WrappedFileLink[]) => {
+      if (given) return;
+      given = true;
+      clearTimeout(waiting);
+      callback(links(from));
+    };
+    // A slow check, as over SSH, doesn't hold back the line's other links. Its answer is held,
+    // so the path links the next time the pointer comes to the line.
+    const waiting = setTimeout(() => give(sure), CONFIRM_WAIT_MS);
+    const asked = unsure.map(({ path }) => path);
+    this.confirm(asked).then(
+      (there) => {
+        if (given) return;
+        // Read again, as the terminal may have printed over the line or wrapped it anew meanwhile.
+        const now = read();
+        const confirmed = now.filter(
+          ({ unconfirmed, path }) => unconfirmed && there[asked.indexOf(path)] === true
+        );
+        // The whole path, in place of a dotted folder name inside it taken for a file.
+        const outside = now.filter(
+          ({ unconfirmed, first, last }) =>
+            !unconfirmed && !confirmed.some((path) => first >= path.first && last <= path.last)
+        );
+        give([...outside, ...confirmed]);
+      },
+      () => give(sure)
     );
   }
 }
+
+// How long a line's links wait for a check of its unconfirmed paths.
+const CONFIRM_WAIT_MS = 400;
 
 export function computeWrappedUrlLinks(
   terminal: TerminalLike,
@@ -230,12 +277,18 @@ export interface TextFileLink {
   text: string;
   lineNumber?: number;
   columnNumber?: number;
+  /**
+   * Set for a path from a root, `./` or `~/` that only a check can tell from other text, as its
+   * name has no extension and no separator after it. The terminal links it once it is found
+   * there, in place of any path inside it.
+   */
+  unconfirmed?: true;
 }
 
 /**
- * The folder paths, then the file paths, that a line of text shows, as the terminal links them.
- * A path that runs into the end of the text is left to `endsTruncated`, which says whether the
- * text may go on past it.
+ * The folder paths, then the file paths, then the unconfirmed paths that a line of text shows,
+ * as the terminal links them. A path that runs into the end of the text is left to
+ * `endsTruncated`, which says whether the text may go on past it.
  */
 export function findFileLinksInText(
   text: string,
@@ -280,19 +333,73 @@ export function findFileLinksInText(
     links.push({ index: startIndex, path: filePath, text: linkText, lineNumber, columnNumber });
   }
 
+  const sure = links.length;
+  ROOTED_PATH_REGEX.lastIndex = 0;
+  while ((match = ROOTED_PATH_REGEX.exec(text)) !== null) {
+    const path = stripTrailingPunctuation(match[2]);
+    // A line and column follow the path itself, not punctuation after it.
+    const numbered = path === match[2];
+    const lineNumber = numbered && match[3] ? Number.parseInt(match[3], 10) : undefined;
+    const columnNumber = numbered && match[4] ? Number.parseInt(match[4], 10) : undefined;
+    if (/[\\/]$/.test(path) || path.split(/[\\/]/).includes('..')) continue;
+
+    const startIndex = match.index + match[1].length;
+    if (startsTruncated && startIndex === 0) continue;
+    if (endsTruncated && match.index + match[0].length === text.length) continue;
+    if (isInsideUrl(text, startIndex)) continue;
+
+    const linkText = `${path}${lineNumber ? `:${lineNumber}` : ''}${columnNumber ? `:${columnNumber}` : ''}`;
+    const endIndex = startIndex + linkText.length;
+    // Linked already, as a file with an extension or inside a folder path.
+    const linked = links
+      .slice(0, sure)
+      .some((link) => link.index <= startIndex && link.index + link.text.length >= endIndex);
+    if (linked) continue;
+
+    links.push({
+      index: startIndex,
+      path,
+      text: linkText,
+      ...(lineNumber !== undefined ? { lineNumber } : {}),
+      ...(columnNumber !== undefined ? { columnNumber } : {}),
+      unconfirmed: true,
+    });
+  }
+
   return links;
 }
 
+/** The file links a line shows, leaving out paths that need confirming. */
 export function computeWrappedFileLinks(
   terminal: TerminalLike,
   lineIndex: number,
   activate: FileLinkHandler,
   onHover?: LinkHoverHandler
 ): ILink[] {
+  return wrappedFileLinks(terminal, lineIndex, activate, onHover)
+    .filter(({ unconfirmed }) => !unconfirmed)
+    .map(({ link }) => link);
+}
+
+interface WrappedFileLink {
+  link: ILink;
+  path: string;
+  /** Where its text starts and ends in its logical line. */
+  first: number;
+  last: number;
+  unconfirmed?: true;
+}
+
+function wrappedFileLinks(
+  terminal: TerminalLike,
+  lineIndex: number,
+  activate: FileLinkHandler,
+  onHover?: LinkHoverHandler
+): WrappedFileLink[] {
   const logicalWindow = buildLogicalWindow(terminal.buffer.active, lineIndex, terminal.cols);
   if (!logicalWindow) return [];
 
-  const links: ILink[] = [];
+  const links: WrappedFileLink[] = [];
   for (const found of findFileLinksInText(logicalWindow.text, {
     startsTruncated: logicalWindow.truncatedStart,
     endsTruncated: logicalWindow.truncatedEnd,
@@ -321,7 +428,13 @@ export function computeWrappedFileLinks(
         );
       link.leave = () => onHover(null);
     }
-    links.push(link);
+    links.push({
+      link,
+      path,
+      first: found.index,
+      last: found.index + found.text.length - 1,
+      ...(found.unconfirmed ? { unconfirmed: true as const } : {}),
+    });
   }
 
   return links;

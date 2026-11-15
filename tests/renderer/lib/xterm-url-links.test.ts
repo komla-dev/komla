@@ -1,10 +1,12 @@
-import type { IBufferCell, IBufferLine, ILinkProvider } from '@xterm/xterm';
-import { describe, expect, it, vi } from 'vitest';
+import type { IBufferCell, IBufferLine, ILink, ILinkProvider } from '@xterm/xterm';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   computeWrappedFileLinks,
   computeWrappedUrlLinks,
+  findFileLinksInText,
   terminalHyperlinkTarget,
+  WrappedFileLinkProvider,
 } from '../../../src/renderer/lib/xterm-url-links';
 
 class MockLine implements Partial<IBufferLine> {
@@ -898,6 +900,105 @@ describe('xterm file links', () => {
   });
 });
 
+describe('xterm links to paths without an extension', () => {
+  const proof =
+    '/private/tmp/claude-501/-Users-me--komla-worktrees-app-lean-bell/2d78a415-4f3d-4e64-90b1-33b1b9f96992/scratchpad/proof';
+
+  function linksOf(
+    rows: string[],
+    confirm?: (paths: string[]) => Promise<boolean[]>,
+    handler = vi.fn()
+  ) {
+    const { terminal } = terminalFromLines(rows.map((row) => new MockLine(row)));
+    const provider = new WrappedFileLinkProvider(terminal, handler, undefined, confirm);
+    return new Promise<string[]>((resolve) =>
+      provider.provideLinks(1, (links) => resolve((links ?? []).map((link) => link.text)))
+    );
+  }
+
+  it('links a rooted path with no extension or trailing slash once it is found there', async () => {
+    const confirm = vi.fn(async (paths: string[]) => paths.map(() => true));
+
+    expect(await linksOf([`Files are in ${proof}:`], confirm)).toEqual([proof]);
+    expect(confirm).toHaveBeenCalledWith([proof]);
+  });
+
+  it('opens it at the line printed after it', async () => {
+    const handler = vi.fn();
+    const { terminal } = terminalFromLines([new MockLine('see /repo/build/Makefile:12:3.')]);
+    const provider = new WrappedFileLinkProvider(terminal, handler, undefined, async (paths) =>
+      paths.map(() => true)
+    );
+    const links = await new Promise<
+      NonNullable<Parameters<Parameters<typeof provider.provideLinks>[1]>[0]>
+    >((resolve) => provider.provideLinks(1, (found) => resolve(found ?? [])));
+    const event = {} as MouseEvent;
+    links[0].activate(event, links[0].text);
+
+    expect(links.map((link) => link.text)).toEqual(['/repo/build/Makefile:12:3']);
+    expect(handler).toHaveBeenCalledWith(event, '/repo/build/Makefile', 12, 3);
+  });
+
+  it('does not link one that is not there, such as a route', async () => {
+    const confirm = vi.fn(async (paths: string[]) => paths.map((path) => path === '~/bin/run'));
+
+    expect(
+      await linksOf(['GET /api/users/42 and ./bin/missing but ~/bin/run, src/a.ts'], confirm)
+    ).toEqual(['src/a.ts', '~/bin/run']);
+    expect(confirm).toHaveBeenCalledWith(['/api/users/42', './bin/missing', '~/bin/run']);
+  });
+
+  it('does not link one without a way to check it, or when the check fails', async () => {
+    expect(await linksOf([`in ${proof} and src/a.ts`])).toEqual(['src/a.ts']);
+    expect(
+      await linksOf([`in ${proof} and src/a.ts`], () => Promise.reject(new Error('offline')))
+    ).toEqual(['src/a.ts']);
+    expect(
+      computeWrappedFileLinks(terminalFromLines([new MockLine(`in ${proof}`)]).terminal, 0, vi.fn())
+    ).toEqual([]);
+  });
+
+  it('does not check a line without one', async () => {
+    const confirm = vi.fn(async (paths: string[]) => paths.map(() => true));
+
+    expect(
+      await linksOf(['see /tmp/a/b.png, /tmp/shots/, and/or, a/b/c, /tmp and 10/11/2026'], confirm)
+    ).toEqual(['/tmp/shots/', '/tmp/a/b.png']);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('links the whole path in place of a dotted folder name inside it', async () => {
+    const confirm = async (paths: string[]) => paths.map(() => true);
+
+    expect(await linksOf(['see /out/site.d/assets now'], confirm)).toEqual(['/out/site.d/assets']);
+    expect(await linksOf(['see /out/site.d/assets now'])).toEqual(['/out/site.d']);
+  });
+
+  it('finds them in text as unconfirmed, without the punctuation after them', () => {
+    expect(
+      findFileLinksInText('In ~/.config/komla. Or (./bin/run), C:\\Users\\me\\proof; not ../a/b')
+    ).toEqual([
+      {
+        index: 3,
+        path: '~/.config/komla',
+        text: '~/.config/komla',
+        unconfirmed: true,
+      },
+      { index: 24, path: './bin/run', text: './bin/run', unconfirmed: true },
+      {
+        index: 36,
+        path: 'C:\\Users\\me\\proof',
+        text: 'C:\\Users\\me\\proof',
+        unconfirmed: true,
+      },
+    ]);
+  });
+
+  it('does not take a URL path, a parent folder or a value for one', () => {
+    expect(findFileLinksInText('https://example.com/a/b/c /a/../b/c //a/b/c x=/a/b/c')).toEqual([]);
+  });
+});
+
 describe('terminalHyperlinkTarget', () => {
   it('reads the full path from a file hyperlink', () => {
     // Claude Code marks each row of a wrapped attachment path with the whole path.
@@ -940,5 +1041,73 @@ describe('terminalHyperlinkTarget', () => {
     '',
   ])('ignores %s', (uri) => {
     expect(terminalHyperlinkTarget(uri)).toBeNull();
+  });
+});
+
+describe('xterm links while a path is being confirmed', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("gives the line's other links when the check takes too long", async () => {
+    vi.useFakeTimers();
+    const { terminal } = terminalFromLines([
+      new MockLine('GET /api/users failed at src/server/routes.ts:42'),
+    ]);
+    const provider = new WrappedFileLinkProvider(
+      terminal,
+      vi.fn(),
+      undefined,
+      () => new Promise<boolean[]>(() => {})
+    );
+    const given = vi.fn();
+    provider.provideLinks(1, given);
+    expect(given).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(given).toHaveBeenCalledTimes(1);
+    expect((given.mock.calls[0][0] as ILink[]).map((link) => link.text)).toEqual([
+      'src/server/routes.ts:42',
+    ]);
+  });
+
+  it('links nothing from the old text when the line changed during the check', async () => {
+    const lines = [new MockLine('see /opt/tools/bin now')];
+    const { terminal } = terminalFromLines(lines);
+    let answer: (there: boolean[]) => void = () => {};
+    const provider = new WrappedFileLinkProvider(
+      terminal,
+      vi.fn(),
+      undefined,
+      () => new Promise<boolean[]>((resolve) => (answer = resolve))
+    );
+    const given = new Promise<string[]>((resolve) =>
+      provider.provideLinks(1, (links) => resolve((links ?? []).map((link) => link.text)))
+    );
+    lines[0] = new MockLine('building src/main.ts with care');
+    answer([true]);
+
+    expect(await given).toEqual(['src/main.ts']);
+  });
+
+  it('keeps a confirmed path where other text on its line changed', async () => {
+    const lines = [new MockLine('1/9 done, see /opt/tools/bin now')];
+    const { terminal } = terminalFromLines(lines);
+    let answer: (there: boolean[]) => void = () => {};
+    const provider = new WrappedFileLinkProvider(
+      terminal,
+      vi.fn(),
+      undefined,
+      () => new Promise<boolean[]>((resolve) => (answer = resolve))
+    );
+    const given = new Promise<ILink[]>((resolve) =>
+      provider.provideLinks(1, (links) => resolve(links ?? []))
+    );
+    lines[0] = new MockLine('10/9 done, see /opt/tools/bin now');
+    answer([true]);
+
+    const [link] = await given;
+    expect(link.text).toBe('/opt/tools/bin');
+    expect(link.range.start.x).toBe(16);
   });
 });

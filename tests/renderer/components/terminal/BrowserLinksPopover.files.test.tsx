@@ -222,6 +222,14 @@ describe("the globe's Files section", () => {
     expect(shownFiles()).toEqual(['/tmp/mock.txt', 'src/old.ts', '/tmp/out.log', 'src/app.ts']);
   });
 
+  it('leaves out a printed path with no extension, as a shell prompt prints one each line', () => {
+    print(['me@box:~/projects/app$ cat /tmp/out.log', 'Files are in /tmp/shots/proof:']);
+    renderButton();
+    openList();
+
+    expect(shownFiles()).toEqual(['/tmp/out.log']);
+  });
+
   it('lists printed ignored files only while the file tree shows ignored files', () => {
     // An SSH workspace's list always has its ignored files.
     useFileListStore.setState({

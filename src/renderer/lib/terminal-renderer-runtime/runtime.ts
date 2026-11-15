@@ -765,7 +765,10 @@ export class TerminalRendererRuntime {
       new WrappedFileLinksAddon(
         (event, path, line, column) =>
           this.entries.get(request.terminalId)?.callbacks.onFileLink(event, path, line, column),
-        updateHoveredLink
+        updateHoveredLink,
+        async (paths) =>
+          (await this.entries.get(request.terminalId)?.callbacks.confirmFilePaths?.(paths)) ??
+          paths.map(() => false)
       )
     );
     terminal.loadAddon(new Unicode11Addon());

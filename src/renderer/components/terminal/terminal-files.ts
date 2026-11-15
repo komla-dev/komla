@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 
+import { listedPaths } from '@/lib/listed-paths';
 import { scanWorkspaceTerminalsForFiles } from '@/lib/scan-terminal-files';
 import { useFileListStore } from '@/stores/file-list.store';
 import { useFileViewerStore } from '@/stores/file-viewer.store';
@@ -24,22 +25,6 @@ import {
 import type { QuickLookItem, QuickLookListed } from '@/stores/quick-look.store';
 
 const NO_FILES: TerminalFile[] = [];
-const NO_PATHS: string[] = [];
-
-type FileList = {
-  files: string[];
-  gitIgnoredFiles: string[];
-  emptyDirs: string[];
-  isLoading: boolean;
-};
-
-// Each file list's paths, built the first time each is needed. Keyed by its arrays, which a list
-// marked stale or fetched again with the same paths keeps, unlike the list itself.
-const listedPathSets = new WeakMap<
-  string[],
-  { gitIgnoredFiles: string[]; emptyDirs: string[]; paths: Set<string> }
->();
-
 /**
  * Reads the file hyperlinks and the paths the workspace's terminals printed since the last time,
  * resolved as clicking them would: a path in the workspace, or a full path where its terminal runs.
@@ -142,37 +127,6 @@ async function checkOutsideFiles(workspaceId: string): Promise<void> {
     checking.delete(workspaceId);
     if (again) void checkOutsideFiles(workspaceId);
   }
-}
-
-/**
- * The paths the file tree lists: its files, their folders, its empty folders and, while it shows
- * them, its ignored files, each folder ending in a slash. Null before the list loads, when any
- * path may be in it.
- */
-function listedPaths(list: FileList | undefined, showsIgnored: boolean): Set<string> | null {
-  if (!list || (list.isLoading && list.files.length === 0)) return null;
-  // The list can hold ignored files the tree hides: an SSH workspace's always has them.
-  const gitIgnoredFiles = showsIgnored ? list.gitIgnoredFiles : NO_PATHS;
-  const built = listedPathSets.get(list.files);
-  if (built?.gitIgnoredFiles === gitIgnoredFiles && built.emptyDirs === list.emptyDirs) {
-    return built.paths;
-  }
-  const paths = new Set<string>();
-  for (const files of [list.files, gitIgnoredFiles]) {
-    for (const file of files) {
-      paths.add(file);
-      for (let slash = file.indexOf('/'); slash !== -1; slash = file.indexOf('/', slash + 1)) {
-        paths.add(file.slice(0, slash + 1));
-      }
-    }
-  }
-  for (const dir of list.emptyDirs) paths.add(dir.endsWith('/') ? dir : `${dir}/`);
-  listedPathSets.set(list.files, {
-    gitIgnoredFiles,
-    emptyDirs: list.emptyDirs,
-    paths,
-  });
-  return paths;
 }
 
 /**

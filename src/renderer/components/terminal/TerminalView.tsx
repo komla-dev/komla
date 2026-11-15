@@ -63,6 +63,7 @@ import {
 } from '../../../shared/types/terminal';
 
 import { filePanelShows, openInFilePanel } from './file-panel';
+import { terminalLinkTargetsExist } from './terminal-path-check';
 import { TerminalSearchBar } from './TerminalSearchBar';
 import { endTmuxFindForTyping } from './useTmuxFind';
 
@@ -829,6 +830,14 @@ export function TerminalView({
               uri,
               resolveTerminalUrlOpenTarget(uri, event.shiftKey, urlOpenOptions()),
               fileLinkContextRef.current
+            );
+          },
+          confirmFilePaths: (paths) => {
+            const context = fileLinkContextRef.current;
+            return terminalLinkTargetsExist(
+              terminalId,
+              context,
+              paths.map((path) => resolveTerminalFileLink(path, context, window.api?.platform))
             );
           },
           onFileLink: (event, rawPath, lineNumber) => {
