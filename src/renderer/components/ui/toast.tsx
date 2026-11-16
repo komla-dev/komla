@@ -2,7 +2,7 @@ import { Check, Copy, Info, WarningCircle, X } from '@phosphor-icons/react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { Spinner } from '@/components/ui/spinner';
-import { nativeViewRects, rectsIntersect } from '@/lib/native-view-layout';
+import { hasNativeViews, nativeViewRects, rectsIntersect } from '@/lib/native-view-layout';
 import { ACTION_TOAST_MS } from '@/lib/toast-durations';
 import { Toast, useToastStore } from '@/stores/toast.store';
 
@@ -12,6 +12,15 @@ import type { ToastOverlayState } from '../../../shared/types';
 import type { CSSProperties } from 'react';
 
 type ToastPlacement = 'right' | 'left' | 'over-native-view';
+
+/**
+ * How often the countdown bar moves. In steps, not as an animation: one repainted it every frame
+ * for as long as a toast showed, which kept terminals from drawing smoothly on some machines.
+ */
+const COUNTDOWN_STEP_MS = 500;
+
+/** How often a shown stack checks that a browser preview hasn't moved over it. */
+const TOAST_PLACEMENT_CHECK_MS = 250;
 
 interface ToastItemProps {
   toast: Toast;
@@ -44,6 +53,7 @@ export function ToastItem({ toast, mirrored = false, overlay }: ToastItemProps) 
   const toastRef = useRef<HTMLDivElement>(null);
   const exitingRef = useRef(false);
   const remainingRef = useRef(duration);
+  const [remainingShown, setRemainingShown] = useState(duration);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dismiss = useCallback(() => {
@@ -58,10 +68,14 @@ export function ToastItem({ toast, mirrored = false, overlay }: ToastItemProps) 
   useEffect(() => {
     if (toast.dismissOnTimeout === false || paused) return;
     const startedAt = Date.now();
+    const remaining = () => Math.max(0, remainingRef.current - (Date.now() - startedAt));
     const timer = setTimeout(dismiss, remainingRef.current);
+    const step = setInterval(() => setRemainingShown(remaining()), COUNTDOWN_STEP_MS);
     return () => {
       clearTimeout(timer);
-      remainingRef.current = Math.max(0, remainingRef.current - (Date.now() - startedAt));
+      clearInterval(step);
+      remainingRef.current = remaining();
+      setRemainingShown(remainingRef.current);
     };
   }, [dismiss, paused, toast.dismissOnTimeout]);
 
@@ -204,11 +218,9 @@ export function ToastItem({ toast, mirrored = false, overlay }: ToastItemProps) 
       {toast.dismissOnTimeout !== false && (
         <div className="absolute right-0 bottom-0 left-0 h-[2px] overflow-hidden">
           <div
+            data-countdown
             className={`h-full origin-left ${isError ? 'bg-destructive/30' : 'bg-primary/30'}`}
-            style={{
-              animation: `toast-progress ${duration}ms linear forwards`,
-              animationPlayState: paused ? 'paused' : 'running',
-            }}
+            style={{ transform: `scaleX(${remainingShown / duration})` }}
           />
         </div>
       )}
@@ -266,40 +278,62 @@ export function ToastContainer() {
   const hasToasts = toasts.length > 0;
   const stackRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<ToastPlacement>('right');
+  const shownInOverlayRef = useRef('');
 
-  // Re-placed every frame while shown, since panes can move or open under it.
+  // Sends the overlay layer the stack at `rect`, or takes it back when there is none.
+  const showInOverlay = useCallback((rect: DOMRect | null) => {
+    const overlayState = rect ? toastOverlayState(rect, useToastStore.getState().toasts) : null;
+    const overlayKey = overlayState ? JSON.stringify(overlayState) : '';
+    if (overlayKey === shownInOverlayRef.current) return;
+    if (overlayState) window.api.showToastOverlay(overlayState);
+    else window.api.hideToastOverlay();
+    shownInOverlayRef.current = overlayKey;
+  }, []);
+
+  const place = useCallback(() => {
+    const stack = stackRef.current;
+    if (!stack) return;
+    // With no browser preview open, the corner it starts in is free, and nothing needs measuring.
+    if (!hasNativeViews()) {
+      setPlacement('right');
+      showInOverlay(null);
+      return;
+    }
+    const rect = stack.getBoundingClientRect();
+    const next = chooseToastPlacement(rect, document.documentElement.clientWidth);
+    setPlacement(next);
+    showInOverlay(next === 'over-native-view' ? rect : null);
+  }, [showInOverlay]);
+
+  // Re-placed while shown, since panes can move or open under it. Not every frame: measuring the
+  // page that often, for as long as a toast shows, kept terminals from drawing smoothly.
   useLayoutEffect(() => {
     if (!hasToasts) {
       setPlacement('right');
       return;
     }
-    let animationFrame = 0;
-    let shownInOverlay = '';
-    const place = () => {
-      const stack = stackRef.current;
-      if (stack) {
-        const rect = stack.getBoundingClientRect();
-        const next = chooseToastPlacement(rect, document.documentElement.clientWidth);
-        setPlacement(next);
-        const overlayState =
-          next === 'over-native-view'
-            ? toastOverlayState(rect, useToastStore.getState().toasts)
-            : null;
-        const overlayKey = overlayState ? JSON.stringify(overlayState) : '';
-        if (overlayKey !== shownInOverlay) {
-          if (overlayState) window.api.showToastOverlay(overlayState);
-          else window.api.hideToastOverlay();
-          shownInOverlay = overlayKey;
-        }
-      }
-      animationFrame = requestAnimationFrame(place);
-    };
-    place();
+    const interval = setInterval(place, TOAST_PLACEMENT_CHECK_MS);
+    window.addEventListener('resize', place);
     return () => {
-      cancelAnimationFrame(animationFrame);
-      if (shownInOverlay) window.api.hideToastOverlay();
+      clearInterval(interval);
+      window.removeEventListener('resize', place);
+      if (shownInOverlayRef.current) window.api.hideToastOverlay();
+      shownInOverlayRef.current = '';
     };
-  }, [hasToasts]);
+  }, [hasToasts, place]);
+
+  // A toast coming or going changes the stack's size, so it is placed again at once.
+  useLayoutEffect(() => {
+    if (hasToasts) place();
+  }, [hasToasts, place, toasts]);
+
+  // Moving into the overlay layer lays the stack out in its own corner, so the overlay is sent
+  // where it now sits. Only sent, not placed again: two corners that each chose the other would
+  // keep re-rendering.
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (placement === 'over-native-view' && stack) showInOverlay(stack.getBoundingClientRect());
+  }, [placement, showInOverlay]);
 
   // Dismissals and actions from toasts drawn in the overlay layer.
   useEffect(() => {

@@ -88,6 +88,50 @@ describe('ToastContainer', () => {
     expect(screen.queryByText('Saved')).toBeNull();
   });
 
+  // An animation repainted the bar every frame for as long as a toast showed, which kept
+  // terminals from drawing smoothly on some machines. It moves in steps instead.
+  it('shows the time left in steps, standing still while paused', () => {
+    act(() => {
+      useToastStore.getState().addToast('Moved "demo" to the Trash', 'success', {
+        action: { label: 'Undo', onClick: vi.fn() },
+      });
+    });
+    render(<ToastContainer />);
+    const bar = () =>
+      toastElement('Moved "demo" to the Trash').querySelector<HTMLElement>('[data-countdown]')!;
+
+    expect(bar().style.animation).toBe('');
+    expect(bar().style.transform).toBe('scaleX(1)');
+
+    advance(5000);
+    expect(bar().style.transform).toBe('scaleX(0.5)');
+
+    fireEvent.mouseEnter(toastElement('Moved "demo" to the Trash'));
+    advance(3000);
+    expect(bar().style.transform).toBe('scaleX(0.5)');
+
+    fireEvent.mouseLeave(toastElement('Moved "demo" to the Trash'));
+    advance(2500);
+    expect(bar().style.transform).toBe('scaleX(0.25)');
+  });
+
+  it('shows the time left exactly where it paused', () => {
+    act(() => {
+      useToastStore.getState().addToast('Moved "demo" to the Trash', 'success', {
+        action: { label: 'Undo', onClick: vi.fn() },
+      });
+    });
+    render(<ToastContainer />);
+
+    advance(5400);
+    fireEvent.mouseEnter(toastElement('Moved "demo" to the Trash'));
+
+    expect(
+      toastElement('Moved "demo" to the Trash').querySelector<HTMLElement>('[data-countdown]')!
+        .style.transform
+    ).toBe('scaleX(0.46)');
+  });
+
   it('pauses auto-dismiss while focus is inside the toast', () => {
     act(() => {
       useToastStore.getState().addToast('Saved', 'info');
@@ -247,6 +291,7 @@ describe('ToastContainer next to a native browser preview', () => {
   const previewHost = document.createElement('div');
   previewHost.dataset.nativeView = 'dev-preview';
   let previewRect = { left: 600, right: 1200, top: 40, bottom: 800 };
+  let leftStackBox = { left: 16, right: 300, top: 740, bottom: 784 };
 
   function stack(): HTMLElement {
     return screen.getByRole('status').firstElementChild as HTMLElement;
@@ -270,7 +315,7 @@ describe('ToastContainer next to a native browser preview', () => {
         const box = this.dataset.nativeView
           ? previewRect
           : this.classList.contains('left-4')
-            ? { left: 16, right: 300, top: 740, bottom: 784 }
+            ? leftStackBox
             : this.classList.contains('right-4')
               ? { left: 900, right: 1184, top: 740, bottom: 784 }
               : { left: 0, right: 0, top: 0, bottom: 0 };
@@ -282,6 +327,7 @@ describe('ToastContainer next to a native browser preview', () => {
         });
       }
     );
+    leftStackBox = { left: 16, right: 300, top: 740, bottom: 784 };
     document.body.appendChild(previewHost);
     act(() => {
       useToastStore.getState().addToast('Saved', 'success');
@@ -311,7 +357,7 @@ describe('ToastContainer next to a native browser preview', () => {
     expect(stack()).toHaveClass('left-4');
 
     previewHost.remove();
-    advance(50);
+    advance(250);
 
     expect(stack()).toHaveClass('right-4');
   });
@@ -381,6 +427,71 @@ describe('ToastContainer next to a native browser preview', () => {
     expect(sent?.toasts.at(-1)?.quiet).toBe(true);
   });
 
+  // Measuring the page every frame for as long as a toast shows kept terminals from drawing smoothly.
+  it('checks where it fits a few times a second, not every frame', () => {
+    previewRect = { left: 600, right: 1200, top: 40, bottom: 800 };
+    render(<ToastContainer />);
+    const measure = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    measure.mockClear();
+
+    advance(1000);
+
+    const stackMeasures = measure.mock.contexts.filter((element) => element === stack());
+    expect(stackMeasures.length).toBeGreaterThan(0);
+    expect(stackMeasures.length).toBeLessThanOrEqual(5);
+  });
+
+  it('tells the overlay layer where the stack sits after it moves corners', () => {
+    previewRect = { left: 600, right: 1200, top: 40, bottom: 800 };
+    render(<ToastContainer />);
+    expect(stack()).toHaveClass('left-4');
+
+    previewRect = { left: 0, right: 1200, top: 40, bottom: 800 };
+    advance(250);
+
+    expect(vi.mocked(window.api.showToastOverlay).mock.lastCall?.[0].bounds).toEqual({
+      x: 900,
+      y: 740,
+      width: 284,
+      height: 44,
+    });
+  });
+
+  it('keeps showing when each corner would choose the other', () => {
+    // Laid out higher in the left corner, the stack clears a preview that covers its right one.
+    leftStackBox = { left: 16, right: 300, top: 700, bottom: 744 };
+    previewRect = { left: 600, right: 1200, top: 750, bottom: 800 };
+
+    expect(() => render(<ToastContainer />)).not.toThrow();
+    advance(1000);
+    expect(toastElement('Saved')).toBeInTheDocument();
+  });
+
+  it('moves at once when the window is resized', () => {
+    previewRect = { left: 0, right: 10, top: 0, bottom: 10 };
+    render(<ToastContainer />);
+    expect(stack()).toHaveClass('right-4');
+
+    previewRect = { left: 600, right: 1200, top: 40, bottom: 800 };
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    expect(stack()).toHaveClass('left-4');
+  });
+
+  it('measures nothing while no preview is open', () => {
+    previewHost.remove();
+    render(<ToastContainer />);
+    const measure = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    measure.mockClear();
+
+    advance(1000);
+
+    expect(measure).not.toHaveBeenCalled();
+    expect(stack()).toHaveClass('right-4');
+  });
+
   it('sends the overlay layer only what changed, not every frame', () => {
     previewRect = { left: 0, right: 1200, top: 40, bottom: 800 };
     render(<ToastContainer />);
@@ -410,7 +521,7 @@ describe('ToastContainer next to a native browser preview', () => {
     expect(window.api.hideToastOverlay).not.toHaveBeenCalled();
 
     previewRect = { left: 600, right: 1200, top: 40, bottom: 800 };
-    advance(50);
+    advance(250);
 
     expect(window.api.hideToastOverlay).toHaveBeenCalledTimes(1);
     expect(stack()).toHaveClass('left-4');

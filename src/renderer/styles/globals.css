@@ -1003,17 +1003,6 @@ html[data-status-bar-row='large'] [data-status-bar] {
   }
 }
 
-/* Transform, not width, so the compositor keeps it moving while the renderer is
-   busy, as it is right after a workspace launch. */
-@keyframes toast-progress {
-  from {
-    transform: scaleX(1);
-  }
-  to {
-    transform: scaleX(0);
-  }
-}
-
 .toast-enter {
   animation: toast-fade-in 0.15s ease-out forwards;
 }

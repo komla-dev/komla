@@ -9,8 +9,14 @@ export function rectsIntersect(a: Box, b: Box): boolean {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
+const NATIVE_VIEW_HOST = '[data-native-view]';
+
+export function hasNativeViews(): boolean {
+  return document.querySelector(NATIVE_VIEW_HOST) !== null;
+}
+
 export function nativeViewRects(): DOMRect[] {
-  return [...document.querySelectorAll<HTMLElement>('[data-native-view]')].map((host) =>
+  return [...document.querySelectorAll<HTMLElement>(NATIVE_VIEW_HOST)].map((host) =>
     host.getBoundingClientRect()
   );
 }
