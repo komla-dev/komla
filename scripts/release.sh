@@ -1400,8 +1400,10 @@ phase_verify() {
 
 phase_publish() {
   info "Pushing to remote..."
-  # Only this release's tag: --tags would also push every other local tag.
-  git push origin HEAD "refs/tags/v${VERSION}"
+  # The release commit lands on main whatever branch it was built on, such as
+  # a worktree's own branch. Only this release's tag: --tags would also push
+  # every other local tag.
+  git push origin HEAD:refs/heads/main "refs/tags/v${VERSION}"
   success "Pushed to remote"
 }
 

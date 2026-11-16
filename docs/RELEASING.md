@@ -111,7 +111,7 @@ Use `--no-rollback` to disable for manual recovery.
 11. **Upload** — Uploads artifacts to Cloudflare R2 with retry
 12. **Upload manifests** — Patches and uploads auto-updater manifests
 13. **Verify** — Downloads artifacts from CDN and validates SHA256 checksums
-14. **Publish** — Pushes the release commit and its `v{version}` tag
+14. **Publish** — Pushes the release commit to `main`, from whatever branch it was built on, and its `v{version}` tag
 15. **Cleanup** — Removes old R2 artifacts (keeps newest 20)
 
 ## Prerequisites
