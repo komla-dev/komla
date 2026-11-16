@@ -523,7 +523,7 @@ fn validate_source(
     Ok(manifest)
 }
 
-fn is_manifest_id(value: &str) -> bool {
+pub(crate) fn is_manifest_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value

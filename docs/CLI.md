@@ -388,11 +388,17 @@ text and whose `background_tasks` hold the done as above until the program works
 or for 30 minutes. `komla notify` drops a hook Grok Build runs (`GROK_HOOK_EVENT` is set) for
 another agent's `--source`, as Grok also runs the hooks Claude Code, Codex and Cursor read, and
 likewise a hook Cursor (`CURSOR_VERSION` and `CURSOR_PROJECT_DIR`) or Devin (`DEVIN_PROJECT_DIR`)
-runs, as both run Claude Code's. It also drops `--source claude-code` hooks from a Claude Code
-background session (`CLAUDE_JOB_DIR`), whose daemon keeps the environment of the terminal that
-started it, and from print and SDK mode (`CLAUDE_CODE_ENTRYPOINT` starting with `sdk`), such as a
-`claude -p` another agent runs; `komla notify -- claude -p …` still reports such a run. Komla's
-terminals don't inherit either variable from the process that started Komla.
+runs, as both run Claude Code's. It also drops `--source claude-code` hooks from print and SDK
+mode (`CLAUDE_CODE_ENTRYPOINT` starting with `sdk`), such as a `claude -p` another agent runs;
+`komla notify -- claude -p …` still reports such a run. A Claude Code background session
+(`CLAUDE_JOB_DIR`) runs in Claude's daemon, which keeps the environment of the terminal that started
+it, whatever session it runs. Claude can move a terminal's session there mid-turn, leaving the
+terminal's `claude` to show it without reporting a status, so `komla notify` keeps the terminal each
+interactive session's `UserPromptSubmit` and `Stop` went to, in `claude-sessions/` in Komla's data
+folder, for 30 days. A background session whose transcript folder holds the `continued-in` record
+of such a session reports to that session's terminal; hooks from any other background session,
+such as an agent the daemon starts, are dropped. Komla's terminals don't inherit `CLAUDE_JOB_DIR` or
+`CLAUDE_CODE_ENTRYPOINT` from the process that started Komla.
 
 Codex 0.161 and later run every session's hooks in one shared `codex app-server` process, with the
 environment of the terminal that started it, so a Codex hook's `terminalId` and `workspaceId` may

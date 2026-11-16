@@ -723,6 +723,50 @@ describe('Terminal Attention State: the status any program reports in its Termin
     });
   });
 
+  describe("Claude Code's session moved into its background daemon mid-turn", () => {
+    // The Terminal's `claude` then only shows the daemon's session: it clears its status and
+    // reports none, and the session's hooks, under a new session id, keep the Terminal's state.
+    const moved = (hook: AgentHook) => ({
+      ...hook,
+      hookInput: { ...hook.hookInput, session_id: 'moved' },
+    });
+
+    it('spins on its hooks, and shows its done', async () => {
+      const { attention, terminal, windows, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      attention.programStatusChanged('t1', { state: 'clear' });
+
+      await attention.hook(
+        toTerminal('t1'),
+        moved(claudeHook('activity', { hook_event_name: 'PreToolUse' }))
+      );
+      const working = !!terminal('t1').agentActive;
+      const done = attention.hook(toTerminal('t1'), moved(stop('Shelved the classics')));
+      await vi.runAllTimersAsync();
+      await done;
+
+      expect(working).toBe(true);
+      expect(!!terminal('t1').agentActive).toBe(false);
+      expect(terminal('t1').attention?.kind).toBe('turn-complete');
+      expect(windows.attentionRaised).toHaveBeenCalled();
+    });
+
+    it('spins again on the next prompt typed into it', async () => {
+      const { attention, terminal, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      attention.programStatusChanged('t1', { state: 'clear' });
+      const done = attention.hook(toTerminal('t1'), moved(stop()));
+      await vi.runAllTimersAsync();
+      await done;
+
+      await attention.hook(toTerminal('t1'), moved(prompt('Use the country header')));
+
+      expect(terminal('t1').agentActive).toBe(true);
+    });
+  });
+
   describe('a program that ends every turn idle, whose hooks tell how it ended, as OpenCode 2', () => {
     const opencode = (state: string) => ({ app: 'opencode', state });
     const openCodeHook = (kind: AgentHook['kind'], event: string, message?: string) =>

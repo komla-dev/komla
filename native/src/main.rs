@@ -2,6 +2,7 @@ use anyhow::{bail, Context};
 use komla::COMPANION_PROTOCOL_VERSION;
 
 mod automation;
+mod claude_sessions;
 mod cli;
 mod clock;
 mod desktop;

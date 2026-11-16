@@ -191,7 +191,11 @@ fn locate(inbox: &Path) -> Option<(PathBuf, String)> {
     Some((companions.parent()?.join(JOURNAL_DIRECTORY), key))
 }
 
-fn write_atomically(directory: &Path, name: &str, contents: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn write_atomically(
+    directory: &Path,
+    name: &str,
+    contents: &[u8],
+) -> anyhow::Result<()> {
     // A reader lists `*.json`, which a dotfile isn't.
     let temp = directory.join(format!(".{name}.{}.{}.tmp", std::process::id(), now_ms()));
     let mut file = fs::OpenOptions::new();

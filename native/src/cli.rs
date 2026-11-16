@@ -16,6 +16,7 @@ use komla::{NotificationPresentation, PendingTerminalHook, RepositorySnapshot};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::claude_sessions;
 use crate::desktop::{DesktopView, NowhereToShow, Shown, Viewer};
 use crate::mailbox;
 use crate::offline_workspace::{
@@ -185,10 +186,14 @@ struct CliEnvironment {
     run_by_cursor: bool,
     /// Devin started this as a hook. It also runs the hooks Claude Code reads.
     run_by_devin: bool,
-    /// Claude Code runs this outside an interactive session: a background session's daemon
-    /// (`claude --bg`), which kept the environment of the Terminal that started it, or print
-    /// and SDK mode, such as a `claude -p` another agent runs in its Terminal.
+    /// Claude Code runs this in print or SDK mode, such as a `claude -p` another agent runs in its
+    /// Terminal.
     run_by_detached_claude: bool,
+    /// Claude Code runs this in a background session of its daemon, which kept the environment of
+    /// the Terminal that started the daemon, whichever session it now runs; see claude_sessions.
+    claude_background_session: bool,
+    /// Where `komla notify` keeps the Terminal each Claude session reported to.
+    claude_sessions: Option<PathBuf>,
     /// Run outside every workspace on an SSH host, this reaches a desktop that uses the host.
     reached_host_desktop: bool,
 }
@@ -296,9 +301,10 @@ impl CliEnvironment {
             run_by_cursor: non_empty_env("CURSOR_VERSION").is_some()
                 && non_empty_env("CURSOR_PROJECT_DIR").is_some(),
             run_by_devin: non_empty_env("DEVIN_PROJECT_DIR").is_some(),
-            run_by_detached_claude: non_empty_env("CLAUDE_JOB_DIR").is_some()
-                || non_empty_env("CLAUDE_CODE_ENTRYPOINT")
-                    .is_some_and(|entrypoint| entrypoint.starts_with("sdk")),
+            run_by_detached_claude: non_empty_env("CLAUDE_CODE_ENTRYPOINT")
+                .is_some_and(|entrypoint| entrypoint.starts_with("sdk")),
+            claude_background_session: non_empty_env("CLAUDE_JOB_DIR").is_some(),
+            claude_sessions: komla_data_dir().map(|data| data.join(claude_sessions::DIRECTORY)),
             reached_host_desktop,
         })
     }
@@ -341,6 +347,48 @@ impl CliEnvironment {
             || (self.run_by_cursor && !source.starts_with("cursor"))
             || (self.run_by_devin && !source.starts_with("devin"))
             || (self.run_by_detached_claude && source == "claude-code")
+    }
+
+    /// Keeps the Terminal a Claude session's hooks go to, for a background session that
+    /// continues it.
+    fn record_claude_session(&self, hook_input: &Value) {
+        let (Some(directory), Some(terminal_id), Some(session)) = (
+            &self.claude_sessions,
+            &self.terminal_id,
+            hook_input.get("session_id").and_then(Value::as_str),
+        ) else {
+            return;
+        };
+        let route = claude_sessions::SessionRoute {
+            terminal_id: terminal_id.clone(),
+            api_url: Some(self.api_url.clone()),
+            workspace_id: self.workspace_id.clone(),
+            companion_inbox: self
+                .companion_inbox
+                .as_ref()
+                .map(|inbox| inbox.to_string_lossy().into_owned()),
+        };
+        claude_sessions::record(directory, session, &route);
+    }
+
+    /// This background session's hooks as the session it continues sent them, from the Terminal
+    /// that shows it; None for a session no Terminal showed, such as the daemon's own agent.
+    fn for_continued_claude_session(&self, hook_input: &Value) -> Option<Self> {
+        let route = claude_sessions::continued_route(
+            self.claude_sessions.as_deref()?,
+            hook_input.get("session_id")?.as_str()?,
+            Path::new(hook_input.get("transcript_path")?.as_str()?),
+        )?;
+        // The Komla its Terminal reached, which the daemon's own environment may not name.
+        let api_url = route.api_url.unwrap_or_else(|| self.api_url.clone());
+        Some(Self {
+            scoped_url: api_url.contains("/terminals/"),
+            api_url,
+            terminal_id: Some(route.terminal_id),
+            workspace_id: route.workspace_id,
+            companion_inbox: route.companion_inbox.map(PathBuf::from),
+            ..self.clone()
+        })
     }
 }
 
@@ -539,6 +587,10 @@ trait KomlaApi {
     /// Sends the next requests for the workspace `--workspace` named, not the calling one.
     fn target_workspace(&mut self, _workspace_id: &str) {}
 
+    /// Sends the next requests as from `environment`'s Terminal, to its Komla. Required, as a
+    /// request that ignored it would go to another Terminal's Komla.
+    fn route_as(&mut self, environment: &CliEnvironment);
+
     fn request(
         &mut self,
         method: &str,
@@ -597,6 +649,10 @@ struct HttpKomlaApi {
 }
 
 impl KomlaApi for HttpKomlaApi {
+    fn route_as(&mut self, environment: &CliEnvironment) {
+        self.environment = environment.clone();
+    }
+
     fn target_workspace(&mut self, workspace_id: &str) {
         self.environment.target_workspace_id = Some(workspace_id.to_owned());
         self.environment.workspace_id = Some(workspace_id.to_owned());
@@ -2575,6 +2631,9 @@ fn notify_command(
     if is_hook && environment.runs_hook_for_other_work(&source) {
         return Ok(());
     }
+    // Its input says whether it continues a session a Terminal showed; see claude_sessions.
+    let from_claude_background_session =
+        is_hook && source == "claude-code" && environment.claude_background_session;
     // Agent hook runners parse hook stdout as protocol JSON (Codex rejects
     // unknown fields), so hook invocations must not echo Komla's response.
     let mut hook_stdout = std::io::sink();
@@ -2633,6 +2692,20 @@ fn notify_command(
     } else {
         read_optional_json(input)?
     };
+    let continued = if from_claude_background_session {
+        let Some(continued) = environment.for_continued_claude_session(&hook_input) else {
+            return Ok(());
+        };
+        api.route_as(&continued);
+        Some(continued)
+    } else {
+        None
+    };
+    let environment = continued.as_ref().unwrap_or(environment);
+    // Each turn keeps the route fresh, a moved session's too, so an active one is never forgotten.
+    if source == "claude-code" && matches!(event.as_deref(), Some("UserPromptSubmit" | "Stop")) {
+        environment.record_claude_session(&hook_input);
+    }
     // Komla reads nothing of a tool's output, which may be large.
     if matches!(event.as_deref(), Some("PostToolUse" | "PostToolUseFailure")) {
         if let Some(object) = hook_input.as_object_mut() {
@@ -4311,6 +4384,8 @@ mod tests {
         requests: Vec<Request>,
         responses: VecDeque<HttpResponse>,
         target: Option<String>,
+        /// The Terminal and Komla `route_as` sent the next requests for.
+        routed: Option<(Option<String>, String)>,
     }
 
     impl FakeApi {
@@ -4318,6 +4393,7 @@ mod tests {
             Self {
                 requests: Vec::new(),
                 target: None,
+                routed: None,
                 responses: VecDeque::from([HttpResponse {
                     status: 200,
                     body: body.to_string(),
@@ -4329,6 +4405,10 @@ mod tests {
     impl KomlaApi for FakeApi {
         fn target_workspace(&mut self, workspace_id: &str) {
             self.target = Some(workspace_id.to_owned());
+        }
+
+        fn route_as(&mut self, environment: &CliEnvironment) {
+            self.routed = Some((environment.terminal_id.clone(), environment.api_url.clone()));
         }
 
         fn request(
@@ -4455,6 +4535,7 @@ browser preview.";
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::from([HttpResponse {
                 status: 400,
                 body: json!({
@@ -4481,6 +4562,7 @@ browser preview.";
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::from([HttpResponse {
                 status: 502,
                 body: json!({
@@ -4513,6 +4595,8 @@ browser preview.";
             run_by_cursor: false,
             run_by_devin: false,
             run_by_detached_claude: false,
+            claude_background_session: false,
+            claude_sessions: None,
             reached_host_desktop: false,
         }
     }
@@ -4604,6 +4688,10 @@ browser preview.";
             refreshed_before: Vec<usize>,
         }
         impl KomlaApi for RouteTrackingApi {
+            fn route_as(&mut self, environment: &CliEnvironment) {
+                self.inner.route_as(environment);
+            }
+
             fn refresh_route(&mut self) {
                 self.refreshed_before.push(self.inner.requests.len());
             }
@@ -4622,6 +4710,7 @@ browser preview.";
             inner: FakeApi {
                 requests: Vec::new(),
                 target: None,
+                routed: None,
                 responses: VecDeque::from([
                     HttpResponse {
                         status: 200,
@@ -4651,6 +4740,8 @@ browser preview.";
     }
 
     impl KomlaApi for DisconnectedApi {
+        fn route_as(&mut self, _: &CliEnvironment) {}
+
         fn request(&mut self, _: &str, _: &str, _: &[u8], _: bool) -> anyhow::Result<HttpResponse> {
             Err(KomlaUnreachable("connection refused".to_owned()).into())
         }
@@ -4762,6 +4853,8 @@ browser preview.";
     }
 
     impl KomlaApi for OfflineGuideApi {
+        fn route_as(&mut self, _: &CliEnvironment) {}
+
         fn request(&mut self, _: &str, _: &str, _: &[u8], _: bool) -> anyhow::Result<HttpResponse> {
             Err(KomlaUnreachable("connection refused".to_owned()).into())
         }
@@ -4973,6 +5066,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::from([HttpResponse {
                 status: 200,
                 body: "# Project Setup\n".to_owned(),
@@ -5065,6 +5159,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::from([HttpResponse {
                 status: 200,
                 body: "# Komla Appearance\n".to_owned(),
@@ -5088,6 +5183,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
             let mut api = FakeApi {
                 requests: Vec::new(),
                 target: None,
+                routed: None,
                 responses: VecDeque::from([HttpResponse {
                     status: 200,
                     body: "# Guide\n".to_owned(),
@@ -5856,6 +5952,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: bodies
                 .into_iter()
                 .map(|body| HttpResponse {
@@ -6804,6 +6901,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
 
@@ -6832,6 +6930,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
 
@@ -6846,6 +6945,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
 
@@ -6860,6 +6960,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
 
@@ -6876,6 +6977,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
 
@@ -6890,6 +6992,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::from([HttpResponse {
                 status: 404,
                 body: json!({
@@ -6928,6 +7031,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::from([HttpResponse {
                 status: 200,
                 body: format!("event: message\ndata: {response}\n\n"),
@@ -6989,6 +7093,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
 
@@ -7013,6 +7118,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
         let mut input = Cursor::new(br#"{"hook":"payload"}"#);
@@ -7089,6 +7195,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
         let output = run_in(
@@ -7141,6 +7248,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
         let mut input = Cursor::new(Vec::<u8>::new());
@@ -7552,6 +7660,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         let mut api = FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: VecDeque::new(),
         };
         let output = run_in(
@@ -7572,6 +7681,7 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
         FakeApi {
             requests: Vec::new(),
             target: None,
+            routed: None,
             responses: (0..count)
                 .map(|_| HttpResponse {
                     status: 200,
@@ -8050,6 +8160,120 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
     }
 
     #[test]
+    fn a_session_claude_moves_to_the_background_still_reports_to_its_terminal() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let send = |environment: &CliEnvironment, event: &str, hook_input: Value| {
+            let mut api = FakeApi::responding(json!({"success": true}));
+            let mut input = Cursor::new(serde_json::to_vec(&hook_input).unwrap());
+            let args = ["notify", "--source", "claude-code", "--event", event].map(str::to_owned);
+            run_command(
+                &args,
+                environment,
+                &mut api,
+                &mut input,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+            let bodies = api
+                .requests
+                .iter()
+                .map(|request| serde_json::from_slice::<Value>(&request.body).unwrap())
+                .collect::<Vec<_>>();
+            (bodies, api.routed)
+        };
+        let transcript = |session: &str| project.join(format!("{session}.jsonl"));
+        let sessions = Some(home.path().join("claude-sessions"));
+        // The Terminal's own Claude takes a prompt.
+        let interactive = CliEnvironment {
+            claude_sessions: sessions.clone(),
+            ..environment()
+        };
+        let prompt = json!({"session_id": "origin", "transcript_path": transcript("origin"), "prompt": "go on"});
+        assert_eq!(send(&interactive, "UserPromptSubmit", prompt).0.len(), 1);
+        // Claude moves the session into its daemon, which kept another Terminal's environment
+        // and also runs an agent of its own.
+        fs::write(
+            transcript("origin"),
+            "{\"type\":\"user\",\"sessionId\":\"origin\"}\n\
+             {\"type\":\"continued-in\",\"sessionId\":\"origin\",\"continuedInSessionId\":\"moved\"}\n",
+        )
+        .unwrap();
+        fs::write(transcript("moved"), "{}\n").unwrap();
+        fs::write(transcript("helper"), "{}\n").unwrap();
+        let daemon = CliEnvironment {
+            api_url: "http://127.0.0.1:60000/terminals/terminal-2".to_owned(),
+            terminal_id: Some("terminal-2".to_owned()),
+            workspace_id: Some("workspace-2".to_owned()),
+            claude_background_session: true,
+            claude_sessions: sessions,
+            ..environment()
+        };
+
+        let tool = json!({"session_id": "moved", "transcript_path": transcript("moved"), "tool_name": "Bash", "tool_input": {}});
+        let (moved, routed) = send(&daemon, "PreToolUse", tool);
+        let (helper, _) = send(
+            &daemon,
+            "Stop",
+            json!({"session_id": "helper", "transcript_path": transcript("helper")}),
+        );
+
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0]["terminalId"], "terminal-1");
+        assert_eq!(
+            routed,
+            Some((
+                Some("terminal-1".to_owned()),
+                "http://127.0.0.1:52863/terminals/terminal-1".to_owned()
+            ))
+        );
+        assert!(helper.is_empty(), "{helper:?}");
+    }
+
+    #[test]
+    fn a_moved_session_on_an_ssh_host_goes_to_the_inbox_its_terminal_used() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let sessions = Some(home.path().join("claude-sessions"));
+        let interactive = CliEnvironment {
+            companion_inbox: Some(PathBuf::from("/helpers/companion/desktop-a/inbox")),
+            claude_sessions: sessions.clone(),
+            ..environment()
+        };
+        interactive.record_claude_session(&json!({"session_id": "origin"}));
+        fs::write(
+            project.join("origin.jsonl"),
+            "{\"type\":\"continued-in\",\"sessionId\":\"origin\",\"continuedInSessionId\":\"moved\"}\n",
+        )
+        .unwrap();
+        let daemon = CliEnvironment {
+            terminal_id: Some("terminal-2".to_owned()),
+            workspace_id: Some("workspace-2".to_owned()),
+            companion_inbox: Some(PathBuf::from("/helpers/companion/desktop-b/inbox")),
+            claude_background_session: true,
+            claude_sessions: sessions,
+            ..environment()
+        };
+
+        let moved = daemon
+            .for_continued_claude_session(&json!({
+                "session_id": "moved",
+                "transcript_path": project.join("moved.jsonl"),
+            }))
+            .unwrap();
+
+        assert_eq!(moved.terminal_id.as_deref(), Some("terminal-1"));
+        assert_eq!(moved.workspace_id.as_deref(), Some("workspace-1"));
+        assert_eq!(
+            moved.companion_inbox,
+            Some(PathBuf::from("/helpers/companion/desktop-a/inbox"))
+        );
+    }
+
+    #[test]
     fn hooks_other_runners_run_for_claude_send_nothing() {
         let cursor = CliEnvironment {
             run_by_cursor: true,
@@ -8063,14 +8287,21 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
             run_by_detached_claude: true,
             ..environment()
         };
+        // A background session that continues none of a Terminal's sessions.
+        let background_claude = CliEnvironment {
+            claude_background_session: true,
+            ..environment()
+        };
         for (environment, source, expected) in [
             (&cursor, "claude-code", 0),
             (&cursor, "cursor", 1),
             (&devin, "claude-code", 0),
             (&devin, "devin", 1),
             (&detached_claude, "claude-code", 0),
-            // A Codex run in a background Claude session's tool call still reports its own turn.
             (&detached_claude, "codex", 1),
+            (&background_claude, "claude-code", 0),
+            // A Codex run in a background Claude session's tool call still reports its own turn.
+            (&background_claude, "codex", 1),
         ] {
             let mut api = FakeApi::responding(json!({"success": true}));
             let mut input = Cursor::new(br#"{"session_id":"s"}"#.to_vec());
