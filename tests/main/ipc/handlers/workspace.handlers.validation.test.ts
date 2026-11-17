@@ -513,6 +513,29 @@ describe('workspace IPC validation', () => {
     expect(mockWorktreeWatcherService.stopWatching).not.toHaveBeenCalled();
   });
 
+  it('starts no local watcher when an SSH workspace comes back from the Trash', async () => {
+    const { registerWorkspaceHandlers } =
+      await import('../../../../src/main/ipc/handlers/workspace.handlers');
+    const { ipcMain } = (await import('electron')) as unknown as {
+      ipcMain: { _invoke: (channel: string, ...args: unknown[]) => Promise<unknown> };
+    };
+    const backend = { kind: 'ssh', hostId: 'ssh-dev', remoteDirectory: '/home/dev/repo' };
+
+    mockWorkspaceService.get.mockReturnValue({ id: 'ws-1', status: 'trashed', backend });
+    mockWorkspaceService.update.mockReturnValue({
+      id: 'ws-1',
+      status: 'active',
+      workingDirectory: 'ssh://ssh-dev/home/dev/repo',
+      backend,
+    });
+
+    registerWorkspaceHandlers();
+
+    await ipcMain._invoke('workspace:update', 'ws-1', { status: 'active' });
+
+    expect(mockWorktreeWatcherService.startWatching).not.toHaveBeenCalled();
+  });
+
   it('accepts valid HSL color in workspace update', async () => {
     const { registerWorkspaceHandlers } =
       await import('../../../../src/main/ipc/handlers/workspace.handlers');

@@ -474,7 +474,7 @@ export function registerWorkspaceHandlers(): void {
           worktreeWatcherService.stopWatching(workspaceId).catch((err) => {
             console.error(`Failed to stop watcher for dormant workspace ${workspaceId}:`, err);
           });
-        } else {
+        } else if (!isSshWorkspace(result)) {
           worktreeWatcherService
             .startWatching(workspaceId, result.workingDirectory)
             .catch((err) => {
