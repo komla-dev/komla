@@ -1,3 +1,5 @@
+import { normalize } from 'path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -176,8 +178,8 @@ describe('workspaceCwdResolutionService', () => {
     );
 
     const calls = mockRealpathSync.mock.calls.map(([path]) => path);
-    expect(calls.filter((path) => path === '/projects/a')).toHaveLength(1);
-    expect(calls.filter((path) => path === '/projects/b')).toHaveLength(1);
+    expect(calls.filter((path) => path === normalize('/projects/a'))).toHaveLength(1);
+    expect(calls.filter((path) => path === normalize('/projects/b'))).toHaveLength(1);
   });
 
   it('leaves trashed workspaces out of cwd matches', () => {
