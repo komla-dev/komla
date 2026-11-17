@@ -2665,6 +2665,124 @@ describe('sshPortForwardService', () => {
     }
   });
 
+  describe('when a host stays out of reach', () => {
+    function failEverySpawn(): number[] {
+      const spawnedAt: number[] = [];
+      mockSpawn.mockImplementation(() => {
+        spawnedAt.push(Date.now());
+        const child = createMockChild();
+        queueMicrotask(() => {
+          child.stderr.emit('data', Buffer.from('connection timed out'));
+          child.exitCode = 255;
+          child.emit('exit', 255, null);
+        });
+        return child;
+      });
+      return spawnedAt;
+    }
+
+    it('retries its Komla data tunnel every 5 minutes once it has been gone for minutes', async () => {
+      vi.useFakeTimers();
+      try {
+        const spawnedAt = failEverySpawn();
+        const { sshPortForwardService } =
+          await import('../../../src/main/services/ssh-port-forward.service');
+
+        void sshPortForwardService.ensureKomlaDataTunnel('ssh-devbox', 54183).catch(() => {});
+        await vi.advanceTimersByTimeAsync(20 * 60_000);
+
+        const gaps = spawnedAt.slice(1).map((at, index) => at - spawnedAt[index]);
+        expect(gaps.slice(0, 18)).toEqual([
+          1_000,
+          2_000,
+          4_000,
+          8_000,
+          16_000,
+          ...Array(13).fill(30_000),
+        ]);
+        expect(gaps.slice(18)).toEqual([300_000, 300_000]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('retries its Komla data tunnel straight away when asked', async () => {
+      vi.useFakeTimers();
+      try {
+        failEverySpawn();
+        const { sshPortForwardService } =
+          await import('../../../src/main/services/ssh-port-forward.service');
+        void sshPortForwardService.ensureKomlaDataTunnel('ssh-devbox', 54183).catch(() => {});
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        const attempts = mockSpawn.mock.calls.length;
+
+        sshPortForwardService.retryKomlaDataTunnelsNow();
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(mockSpawn).toHaveBeenCalledTimes(attempts + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('retries quickly when asked while a slow restart is under way', async () => {
+      vi.useFakeTimers();
+      try {
+        const spawnedAt = failEverySpawn();
+        const { sshPortForwardService } =
+          await import('../../../src/main/services/ssh-port-forward.service');
+        void sshPortForwardService.ensureKomlaDataTunnel('ssh-devbox', 54183).catch(() => {});
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        let failRestart: () => void = () => {};
+        mockSpawn.mockImplementationOnce(() => {
+          spawnedAt.push(Date.now());
+          const child = createMockChild();
+          failRestart = () => {
+            child.exitCode = 255;
+            child.emit('exit', 255, null);
+          };
+          return child;
+        });
+        const before = spawnedAt.length;
+        for (let second = 0; second < 6 * 60 && spawnedAt.length === before; second++) {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        expect(spawnedAt.length).toBeGreaterThan(before);
+        const attempts = spawnedAt.length;
+
+        sshPortForwardService.retryKomlaDataTunnelsNow();
+        failRestart();
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(spawnedAt).toHaveLength(attempts + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('leaves a connected Komla data tunnel alone when asked to retry', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = createMockChild();
+        mockSpawn.mockReturnValue(child);
+        const { sshPortForwardService } =
+          await import('../../../src/main/services/ssh-port-forward.service');
+        const starting = sshPortForwardService.ensureKomlaDataTunnel('ssh-devbox', 54183);
+        await vi.advanceTimersByTimeAsync(0);
+        markKomlaDataTunnelReady(child);
+        await starting;
+
+        sshPortForwardService.retryKomlaDataTunnelsNow();
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+        expect(mockSpawn).toHaveBeenCalledOnce();
+        expect(child.kill).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('rejects and removes a Komla data tunnel when SSH exits before readiness', async () => {
     const child = createMockChild();
     mockSpawn.mockReturnValue(child);

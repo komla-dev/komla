@@ -37,6 +37,10 @@ const SSH_CONTROL_COMMAND_TIMEOUT_MS = 5_000;
 const KOMLA_DATA_TUNNEL_READY_MARKER = '__KOMLA_DATA_TUNNEL_READY__';
 const KOMLA_DATA_RETRY_INITIAL_MS = 1_000;
 const KOMLA_DATA_RETRY_MAX_MS = 30_000;
+// After this many failed restarts in a row, about 7 minutes, the host is away for a while: an
+// unreachable network or a locked SSH agent. Waking the machine or unlocking the screen retries.
+const KOMLA_DATA_RETRY_SLOW_AFTER_ATTEMPTS = 18;
+const KOMLA_DATA_RETRY_SLOW_MS = 5 * 60_000;
 const CONFIGURED_FORWARD_READY_MARKER = '__KOMLA_PORT_FORWARDS_READY__';
 const CONFIGURED_FORWARD_STDOUT_LIMIT = 1024 * 1024;
 const CONFIGURED_FORWARD_RETRY_INITIAL_MS = 1_000;
@@ -1456,10 +1460,13 @@ class SshPortForwardService {
     if (!target || (expectedTarget && target !== expectedTarget)) return undefined;
     if (this.komlaDataRetryTimers.has(hostId) || isSshHostDisconnected(hostId)) return undefined;
 
-    const delay = Math.min(
-      KOMLA_DATA_RETRY_INITIAL_MS * 2 ** Math.min(target.retryAttempt, 5),
-      KOMLA_DATA_RETRY_MAX_MS
-    );
+    const delay =
+      target.retryAttempt >= KOMLA_DATA_RETRY_SLOW_AFTER_ATTEMPTS
+        ? KOMLA_DATA_RETRY_SLOW_MS
+        : Math.min(
+            KOMLA_DATA_RETRY_INITIAL_MS * 2 ** Math.min(target.retryAttempt, 5),
+            KOMLA_DATA_RETRY_MAX_MS
+          );
     target.retryAttempt++;
     const timer = setTimeout(() => {
       this.komlaDataRetryTimers.delete(hostId);
@@ -1502,6 +1509,19 @@ class SshPortForwardService {
       reason: reason instanceof Error ? reason.message : reason,
     });
     return delay;
+  }
+
+  /**
+   * Starts every data tunnel's backoff over, as if it had just dropped: one waiting to retry tries
+   * again in a second, and one whose restart is under way retries quickly if that restart fails.
+   */
+  retryKomlaDataTunnelsNow(): void {
+    for (const [hostId, target] of this.komlaDataTargets) {
+      target.retryAttempt = 0;
+      if (!this.komlaDataRetryTimers.has(hostId)) continue;
+      this.clearKomlaDataRetry(hostId);
+      this.scheduleKomlaDataRetry(hostId, target, 'Backoff started over');
+    }
   }
 
   private clearKomlaDataRetry(hostId: string): void {

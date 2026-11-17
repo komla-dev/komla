@@ -630,7 +630,10 @@ void app.whenReady().then(async () => {
     void workspaceService.sshSync.syncSoon(undefined, { now: true });
     void sshConnectionService.checkHeldConnections();
     void automationService.tick();
+    sshPortForwardService.retryKomlaDataTunnelsNow();
   });
+  // An SSH agent that locks with the screen fails every login until the user is back.
+  powerMonitor.on('unlock-screen', () => sshPortForwardService.retryKomlaDataTunnelsNow());
   keepAwakeService.setMode(configService.get().keepAwakeMode);
   keepAwakeWhileAgentsWork(() => workspaceService.list());
   promptDraftWindowService.init();
