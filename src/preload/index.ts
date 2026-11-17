@@ -2721,7 +2721,11 @@ const api = {
     timestamp: number;
   }): void => ipcRenderer.send(IPC.DIAGNOSTICS_RENDERER_STATS, stats),
 
-  isDiagnosticsEnabled: komlaEnv !== 'production',
+  // Matches main's shouldEnableDiagnostics: the preload may not import it at runtime, and main
+  // only listens for these reports when KOMLA_DIAGNOSTICS turns its diagnostics on.
+  isDiagnosticsEnabled: !['', '0', 'false', 'off', 'no'].includes(
+    (process.env.KOMLA_DIAGNOSTICS ?? '').trim().toLowerCase()
+  ),
 
   // Voice transcription
   voiceGetModelStatus: (): Promise<string> => ipcRenderer.invoke(IPC.VOICE_MODEL_STATUS),
