@@ -1372,6 +1372,85 @@ describe('SshWorkspaceSync adoption', () => {
     expect(store.add).not.toHaveBeenCalled();
   });
 
+  describe('whose files are gone from its host', () => {
+    const checksOf = (inspect: ReturnType<typeof service>['inspect'], workspaceId: string) =>
+      inspect.mock.calls.filter(([, id]) => id === workspaceId).length;
+
+    it('asks the host once, not on every sync, while its manifest stays the same', async () => {
+      const { manifests, inspect, read, store } = service();
+      read.mockResolvedValue([elsewhere()]);
+      inspect.mockResolvedValue({ state: 'deleted' });
+
+      await manifests.syncSoon('host-a', { now: true });
+      await manifests.syncSoon('host-a', { now: true });
+      await manifests.syncSoon('host-a', { now: true });
+
+      expect(checksOf(inspect, 'ws-50')).toBe(1);
+      expect(store.add).not.toHaveBeenCalled();
+    });
+
+    it('asks again an hour after its directory was missing, which may come back', async () => {
+      const { manifests, inspect, read, store, advance } = service();
+      read.mockResolvedValue([elsewhere()]);
+      inspect.mockResolvedValue({ state: 'missing' });
+      await manifests.syncSoon('host-a', { now: true });
+      advance(30 * 60_000);
+      await manifests.syncSoon('host-a', { now: true });
+      expect(checksOf(inspect, 'ws-50')).toBe(1);
+
+      advance(30 * 60_000);
+      inspect.mockResolvedValue({ state: 'present' });
+      await manifests.syncSoon('host-a', { now: true });
+
+      expect(checksOf(inspect, 'ws-50')).toBe(2);
+      expect(store.add).toHaveBeenCalled();
+    });
+
+    it('asks again once another installation writes its manifest anew', async () => {
+      const { manifests, inspect, read, store } = service();
+      read.mockResolvedValue([elsewhere()]);
+      inspect.mockResolvedValue({ state: 'deleted' });
+      await manifests.syncSoon('host-a', { now: true });
+
+      read.mockResolvedValue([elsewhere({ name: 'add-search-again' })]);
+      inspect.mockResolvedValue({ state: 'present' });
+      await manifests.syncSoon('host-a', { now: true });
+
+      expect(checksOf(inspect, 'ws-50')).toBe(2);
+      expect(store.add).toHaveBeenCalledWith(
+        'host-a',
+        expect.objectContaining({ workspaceId: 'ws-50' }),
+        expect.anything()
+      );
+    });
+
+    it('asks again after the host could not answer', async () => {
+      const { manifests, inspect, read, store } = service();
+      read.mockResolvedValue([elsewhere()]);
+      inspect.mockRejectedValueOnce(new Error('Connection reset by peer'));
+      await manifests.syncSoon('host-a', { now: true });
+
+      inspect.mockResolvedValue({ state: 'present' });
+      await manifests.syncSoon('host-a', { now: true });
+
+      expect(checksOf(inspect, 'ws-50')).toBe(2);
+      expect(store.add).toHaveBeenCalled();
+    });
+
+    it('asks the host again when the user adds it by hand', async () => {
+      const { manifests, inspect, read, store } = service();
+      read.mockResolvedValue([elsewhere()]);
+      inspect.mockResolvedValue({ state: 'deleted' });
+      await manifests.syncSoon('host-a', { now: true });
+
+      inspect.mockResolvedValue({ state: 'present' });
+      await manifests.adopt('host-a', 'ws-50');
+
+      expect(checksOf(inspect, 'ws-50')).toBe(2);
+      expect(store.add).toHaveBeenCalled();
+    });
+  });
+
   describe('in a directory a workspace here uses', () => {
     const sameDirectory = () => elsewhere({ backend: sshWorkspace().backend });
 

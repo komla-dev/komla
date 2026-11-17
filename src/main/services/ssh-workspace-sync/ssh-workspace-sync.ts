@@ -54,6 +54,10 @@ const EXPECTED_WORKSPACE_RECHECK_MS = 10_000;
 // A host whose Remote Companion tells Komla of such changes needs none.
 const FOLLOW_UP_MS = 5 * 60_000;
 
+// How long a sync leaves a workspace from another installation whose directory was missing on its
+// host before asking again: the directory may come back, e.g. once a volume is mounted
+const MISSING_FILES_RECHECK_MS = 60 * 60_000;
+
 interface FollowUp {
   /** When following up on the last change from another installation ends. */
   until: number;
@@ -220,6 +224,12 @@ export class SshWorkspaceSync {
   private readonly writes = new Map<string, Promise<void>>();
   /** Deleted here this session; a listing read before must not add them back. */
   private readonly deletedHere = new Set<string>();
+  /**
+   * Manifests whose workspace's files their host said are gone, by workspace id, with the
+   * manifest's content key: a sync asks the host again once another installation rewrites it, or
+   * after a while if the directory was only missing.
+   */
+  private readonly goneFromHost = new Map<string, { key: string; askAgainAt?: number }>();
   private readonly hostSyncs = new Map<string, HostSync>();
   /** The hosts synced again each interval after another installation changed their workspaces. */
   private readonly followUps = new Map<string, FollowUp>();
@@ -461,6 +471,7 @@ export class SshWorkspaceSync {
       if (store.get(workspaceId) || store.isDeleting(workspaceId)) continue;
       if (this.deletedHere.has(workspaceId)) continue;
       if (this.workspaceInDirectory(hostId, manifest.backend.remoteDirectory)) continue;
+      if (this.knownGoneFromHost(manifest)) continue;
       projects ??= store.projectLookup();
       await this.adoptManifest(hostId, manifest, projects).catch((error) => {
         logger.warn('Could not add an SSH workspace from another Komla installation', {
@@ -600,8 +611,22 @@ export class SshWorkspaceSync {
       manifest.workspaceId
     );
     if (found.state !== 'present') {
+      this.goneFromHost.set(manifest.workspaceId, {
+        key: sshWorkspaceManifestContentKey(manifest),
+        askAgainAt:
+          found.state === 'missing'
+            ? this.dependencies.now() + MISSING_FILES_RECHECK_MS
+            : undefined,
+      });
       throw new Error('That workspace’s files are no longer on this SSH host.');
     }
+    this.goneFromHost.delete(manifest.workspaceId);
+  }
+
+  private knownGoneFromHost(manifest: SshWorkspaceManifest): boolean {
+    const gone = this.goneFromHost.get(manifest.workspaceId);
+    if (!gone || gone.key !== sshWorkspaceManifestContentKey(manifest)) return false;
+    return gone.askAgainAt === undefined || this.dependencies.now() < gone.askAgainAt;
   }
 
   /**
