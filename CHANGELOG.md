@@ -8,6 +8,7 @@
 - Terminals no longer stutter while the "Moved to the Trash" toast with its Undo button is showing.
 - A tab keeps showing that Claude Code is working when Claude moves the session to the background mid-turn, instead of going quiet while the agent carries on.
 - SSH workspaces from another installation whose files are gone no longer make Komla ask the host about them on every sync.
+- When an SSH host can't be reached, such as overnight or while your Mac's screen is locked, Komla waits longer between reconnect attempts instead of retrying every 30 seconds for hours, and reconnects right away when your Mac wakes or unlocks.
 
 ## [1.2.0]
 
