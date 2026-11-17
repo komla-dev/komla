@@ -1,5 +1,5 @@
 import { realpathSync } from 'fs';
-import { normalize, join } from 'path';
+import { normalize, join, posix as pathPosix } from 'path';
 
 import { sanitizeWorktreeProjectSegment } from '../../shared/lib/random-names';
 import { getWorkspaceCwdIdentity, isSshWorkspace } from '../../shared/types';
@@ -22,6 +22,39 @@ export interface WorkspaceCwdResolutionContext {
   workspaces: Workspace[];
   getProject: (projectId: string) => Project | undefined;
   komlaBasePath: string;
+}
+
+/** A workspace with the directory a cwd is compared against. */
+interface WorkspaceDirectory {
+  workspace: Workspace;
+  directory: string;
+  /** The directory is on an SSH host, so it is compared as a path there. */
+  remote: boolean;
+}
+
+/**
+ * A cwd as a path on this machine, resolved on disk only when a local workspace needs it, and as
+ * a path on an SSH host.
+ */
+class ComparableCwd {
+  readonly remote: string;
+  private resolvedLocal: string | undefined;
+
+  constructor(
+    private readonly cwd: string,
+    private readonly resolveLocal: (path: string) => string
+  ) {
+    this.remote = pathPosix.normalize(cwd);
+  }
+
+  get local(): string {
+    this.resolvedLocal ??= this.resolveLocal(this.cwd);
+    return this.resolvedLocal;
+  }
+
+  for(entry: WorkspaceDirectory): string {
+    return entry.remote ? this.remote : this.local;
+  }
 }
 
 class WorkspaceCwdResolutionService {
@@ -95,20 +128,16 @@ class WorkspaceCwdResolutionService {
   }
 
   findCandidatesByCwd(cwd: string, context: WorkspaceCwdResolutionContext): Workspace[] {
-    const normalizedCwd = this.normalizeForComparison(cwd);
+    const comparableCwd = this.comparableCwd(cwd);
+    const directories = this.workspaceDirectories(context.workspaces);
 
-    const exactMatches = context.workspaces.filter((workspace) => {
-      const normalizedWorkspaceDir = this.normalizeForComparison(
-        getWorkspaceCwdIdentity(workspace)
-      );
-      return normalizedCwd === normalizedWorkspaceDir;
-    });
+    const exactMatches = this.findExactMatches(comparableCwd, directories);
     if (exactMatches.length > 0) return exactMatches;
 
-    const bestMatches = this.findDeepestDirectoryMatches(normalizedCwd, context.workspaces);
+    const bestMatches = this.findDeepestDirectoryMatches(comparableCwd, directories);
     if (bestMatches.length > 0) return bestMatches;
 
-    const fallback = this.findWorktreePathMatch(normalizedCwd, context);
+    const fallback = this.findWorktreePathMatch(comparableCwd, context);
     return fallback ? [fallback] : [];
   }
 
@@ -117,14 +146,10 @@ class WorkspaceCwdResolutionService {
     context: WorkspaceCwdResolutionContext,
     options: { rejectAmbiguousMatches?: boolean } = {}
   ): WorkspaceCwdResolution {
-    const normalizedCwd = this.normalizeForComparison(cwd);
+    const comparableCwd = this.comparableCwd(cwd);
+    const directories = this.workspaceDirectories(context.workspaces);
 
-    const exactMatches = context.workspaces.filter((workspace) => {
-      const normalizedWorkspaceDir = this.normalizeForComparison(
-        getWorkspaceCwdIdentity(workspace)
-      );
-      return normalizedCwd === normalizedWorkspaceDir;
-    });
+    const exactMatches = this.findExactMatches(comparableCwd, directories);
     let matchingWorkspace: Workspace | undefined = exactMatches[0];
     if (options.rejectAmbiguousMatches && exactMatches.length > 0) {
       const resolution = this.resolveObviousWorkspaceMatch(cwd, exactMatches);
@@ -132,7 +157,7 @@ class WorkspaceCwdResolutionService {
     }
 
     if (!matchingWorkspace) {
-      const bestMatches = this.findDeepestDirectoryMatches(normalizedCwd, context.workspaces);
+      const bestMatches = this.findDeepestDirectoryMatches(comparableCwd, directories);
 
       if (options.rejectAmbiguousMatches && bestMatches.length > 0) {
         const resolution = this.resolveObviousWorkspaceMatch(cwd, bestMatches);
@@ -142,20 +167,54 @@ class WorkspaceCwdResolutionService {
     }
 
     if (!matchingWorkspace) {
-      matchingWorkspace = this.findWorktreePathMatch(normalizedCwd, context);
+      matchingWorkspace = this.findWorktreePathMatch(comparableCwd, context);
     }
 
     return matchingWorkspace ? { workspace: matchingWorkspace } : { error: NO_MATCHING_WORKSPACE };
   }
 
-  private findDeepestDirectoryMatches(normalizedCwd: string, workspaces: Workspace[]): Workspace[] {
+  private comparableCwd(cwd: string): ComparableCwd {
+    return new ComparableCwd(cwd, (path) => this.normalizeForComparison(path));
+  }
+
+  /**
+   * The directories of the workspaces a cwd may belong to, each resolved once per lookup. Trashed
+   * workspaces run nothing, and their directory may be a new workspace's.
+   */
+  private workspaceDirectories(workspaces: Workspace[]): WorkspaceDirectory[] {
+    return workspaces
+      .filter((workspace) => workspace.status !== 'trashed')
+      .map((workspace) => {
+        // An SSH workspace's directory is on its host. Resolving it on this machine's disk finds
+        // nothing, and on macOS a path under /home waits on the automounter for each workspace.
+        const remote = isSshWorkspace(workspace);
+        const directory = getWorkspaceCwdIdentity(workspace);
+        return {
+          workspace,
+          directory: remote
+            ? pathPosix.normalize(directory)
+            : this.normalizeForComparison(directory),
+          remote,
+        };
+      });
+  }
+
+  private findExactMatches(cwd: ComparableCwd, directories: WorkspaceDirectory[]): Workspace[] {
+    return directories
+      .filter((entry) => cwd.for(entry) === entry.directory)
+      .map((entry) => entry.workspace);
+  }
+
+  private findDeepestDirectoryMatches(
+    cwd: ComparableCwd,
+    directories: WorkspaceDirectory[]
+  ): Workspace[] {
     let bestMatches: Workspace[] = [];
     let bestLength = -1;
 
-    for (const workspace of workspaces) {
-      const normalizedWorkspaceDir = this.normalizeForComparison(
-        getWorkspaceCwdIdentity(workspace)
-      );
+    for (const entry of directories) {
+      const { workspace, directory: normalizedWorkspaceDir } = entry;
+      const normalizedCwd = cwd.for(entry);
       const isWithinWorkspace =
         normalizedCwd === normalizedWorkspaceDir ||
         normalizedCwd.startsWith(`${normalizedWorkspaceDir}/`) ||
@@ -172,10 +231,22 @@ class WorkspaceCwdResolutionService {
     return bestMatches;
   }
 
+  /** A local worktree workspace whose managed worktree path holds the cwd, e.g. after it moved. */
   private findWorktreePathMatch(
-    normalizedCwd: string,
+    cwd: ComparableCwd,
     context: WorkspaceCwdResolutionContext
   ): Workspace | undefined {
+    const worktrees = context.workspaces.filter(
+      (workspace): workspace is Workspace & { branchName: string } =>
+        workspace.status !== 'trashed' &&
+        !isSshWorkspace(workspace) &&
+        !!workspace.isWorktree &&
+        !!workspace.branchName
+    );
+    // Without one, a cwd from an SSH host isn't resolved on this machine's disk.
+    if (worktrees.length === 0) return undefined;
+
+    const normalizedCwd = cwd.local;
     const worktreesBase = this.normalizeForComparison(join(context.komlaBasePath, 'worktrees'));
 
     if (!normalizedCwd.startsWith(worktreesBase)) return undefined;
@@ -188,9 +259,7 @@ class WorkspaceCwdResolutionService {
     const projectName = segments[0];
     const safeBranchName = segments[1];
 
-    return context.workspaces.find((workspace) => {
-      if (!workspace.isWorktree || !workspace.branchName) return false;
-
+    return worktrees.find((workspace) => {
       const workspaceSafeBranch = workspace.branchName.replace(/\//g, '-');
       const workspaceProjectName = workspace.repoName;
       const projectMatches =

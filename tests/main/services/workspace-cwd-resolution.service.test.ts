@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createDirectoryWorkspace,
   createProject,
+  createSshWorkspace,
   createTerminal,
+  createTrashedWorkspace,
   createWorktreeWorkspace,
 } from '../../factories';
 import { workspaceCwdResolutionService } from '../../../src/main/services/workspace-cwd-resolution.service';
@@ -119,6 +121,97 @@ describe('workspaceCwdResolutionService', () => {
 
     expect(result.project?.id).toBe('proj-1');
     expect(result.sourceWorkspace).toBeUndefined();
+  });
+
+  it("matches an SSH workspace by its remote directory without resolving it on this machine's disk", () => {
+    // On macOS, a lookup under /home goes through the automounter and can take tens of
+    // milliseconds, which blocks the main process when it is done for every workspace.
+    mockRealpathSync.mockClear();
+    const remote = createSshWorkspace({
+      id: 'ws-remote',
+      backend: {
+        kind: 'ssh',
+        hostId: 'ssh-host-1',
+        remoteDirectory: '/home/dev/.komla/worktrees/project/branch',
+        remoteRepoPath: '/home/dev/.komla/repos/project/repo.git',
+        remoteProjectRoot: '/home/dev/.komla/worktrees/project',
+      },
+    });
+
+    const result = workspaceCwdResolutionService.resolveWorkspaceByCwd(
+      '/home/dev/.komla/worktrees/project/branch/src',
+      { workspaces: [remote], getProject: () => undefined, komlaBasePath: '/mock/home/.komla' },
+      { rejectAmbiguousMatches: true }
+    );
+
+    expect(result.workspace?.id).toBe('ws-remote');
+    expect(mockRealpathSync).not.toHaveBeenCalledWith(expect.stringMatching(/^\/home\/dev/));
+  });
+
+  it("doesn't resolve a cwd from an SSH host on this machine's disk when no SSH workspace matches it", () => {
+    mockRealpathSync.mockClear();
+    const remote = createSshWorkspace({ id: 'ws-remote' });
+
+    const result = workspaceCwdResolutionService.resolveWorkspaceByCwd(
+      '/home/dev/.komla/worktrees/other-project/other-branch',
+      { workspaces: [remote], getProject: () => undefined, komlaBasePath: '/mock/home/.komla' },
+      { rejectAmbiguousMatches: true }
+    );
+
+    expect(result.error).toBeDefined();
+    expect(mockRealpathSync).not.toHaveBeenCalledWith(expect.stringMatching(/^\/home\/dev/));
+  });
+
+  it('resolves each local workspace directory on disk at most once per lookup', () => {
+    mockRealpathSync.mockClear();
+    const workspaces = [
+      createDirectoryWorkspace({ id: 'ws-a', workingDirectory: '/projects/a' }),
+      createDirectoryWorkspace({ id: 'ws-b', workingDirectory: '/projects/b' }),
+    ];
+
+    workspaceCwdResolutionService.resolveWorkspaceByCwd(
+      '/elsewhere/entirely',
+      { workspaces, getProject: () => undefined, komlaBasePath: '/mock/home/.komla' },
+      { rejectAmbiguousMatches: true }
+    );
+
+    const calls = mockRealpathSync.mock.calls.map(([path]) => path);
+    expect(calls.filter((path) => path === '/projects/a')).toHaveLength(1);
+    expect(calls.filter((path) => path === '/projects/b')).toHaveLength(1);
+  });
+
+  it('leaves trashed workspaces out of cwd matches', () => {
+    const trashed = createTrashedWorkspace({ id: 'ws-trashed', workingDirectory: '/projects/app' });
+    const active = createDirectoryWorkspace({ id: 'ws-active', workingDirectory: '/projects/app' });
+
+    const result = workspaceCwdResolutionService.resolveWorkspaceByCwd(
+      '/projects/app',
+      {
+        workspaces: [trashed, active],
+        getProject: () => undefined,
+        komlaBasePath: '/mock/home/.komla',
+      },
+      { rejectAmbiguousMatches: true }
+    );
+
+    expect(result.workspace?.id).toBe('ws-active');
+  });
+
+  it('leaves trashed workspaces out of the managed worktree path match', () => {
+    const trashed = createTrashedWorkspace({
+      id: 'ws-trashed',
+      isWorktree: true,
+      workingDirectory: '/missing/path',
+      repoName: 'project',
+      branchName: 'feature',
+    });
+
+    const result = workspaceCwdResolutionService.resolveWorkspaceByCwd(
+      '/mock/home/.komla/worktrees/project/feature',
+      { workspaces: [trashed], getProject: () => undefined, komlaBasePath: '/mock/home/.komla' }
+    );
+
+    expect(result.workspace).toBeUndefined();
   });
 
   it('matches managed worktree paths by sanitized project segment and branch segment', () => {
