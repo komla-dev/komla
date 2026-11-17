@@ -18,7 +18,7 @@ vi.mock('perf_hooks', () => ({
     enable: vi.fn(),
     disable: vi.fn(),
     percentile: vi.fn(() => 10_000_000), // 10ms in ns
-    max: vi.fn(() => 50_000_000), // 50ms in ns
+    max: 50_000_000, // 50ms in ns, a property like IntervalHistogram.max
     reset: vi.fn(),
   })),
 }));
@@ -105,6 +105,12 @@ function rendererStatsListener(): (event: any, ...args: unknown[]) => void {
 describe('DiagnosticsService', () => {
   let diagnosticsService: any;
   let shouldEnableDiagnostics: typeof import('../../../src/main/services/diagnostics.service').shouldEnableDiagnostics;
+
+  function setEventLoopDelay({ p95Ns, maxNs }: { p95Ns: number; maxNs: number }): void {
+    const histogram = diagnosticsService['eventLoopDelay'];
+    vi.mocked(histogram.percentile).mockReturnValue(p95Ns);
+    Object.assign(histogram, { max: maxNs });
+  }
 
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -280,6 +286,26 @@ describe('DiagnosticsService', () => {
         p95Ms: 300,
       })
     );
+  });
+
+  it('warns when a single stall blocks the event loop even though p95 stays low', () => {
+    // One long synchronous call leaves most samples fast, so only the max shows it.
+    setEventLoopDelay({ p95Ns: 10_000_000, maxNs: 7_700_000_000 }); // 10ms, 7.7s
+
+    diagnosticsService.start();
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Event loop lag is high',
+      expect.objectContaining({ p95Ms: 10, maxMs: 7700 })
+    );
+  });
+
+  it('does not warn about a short event loop delay', () => {
+    setEventLoopDelay({ p95Ns: 10_000_000, maxNs: 50_000_000 }); // 10ms, 50ms
+
+    diagnosticsService.start();
+
+    expect(mockLogger.warn).not.toHaveBeenCalledWith('Event loop lag is high', expect.anything());
   });
 
   it('should warn when PTY buffers are large', async () => {

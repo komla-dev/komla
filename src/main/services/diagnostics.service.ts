@@ -20,6 +20,8 @@ const MIN_INTERVAL_MS = 5_000;
 const RSS_GROWTH_WARN_MB = 250;
 const HEAP_GROWTH_WARN_MB = 150;
 const EVENT_LOOP_P95_WARN_MS = 250;
+// One synchronous call can block the loop for seconds while p95 stays low.
+const EVENT_LOOP_MAX_WARN_MS = 1_000;
 const OUTPUT_BUFFER_WARN_MB = 20;
 
 interface MainMemorySample {
@@ -221,7 +223,10 @@ class DiagnosticsService {
       }
     }
 
-    if (snapshot.eventLoop.p95Ms >= EVENT_LOOP_P95_WARN_MS) {
+    if (
+      snapshot.eventLoop.p95Ms >= EVENT_LOOP_P95_WARN_MS ||
+      snapshot.eventLoop.maxMs >= EVENT_LOOP_MAX_WARN_MS
+    ) {
       logger.warn('Event loop lag is high', {
         p95Ms: snapshot.eventLoop.p95Ms,
         maxMs: snapshot.eventLoop.maxMs,

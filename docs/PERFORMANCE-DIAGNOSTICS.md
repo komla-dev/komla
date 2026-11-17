@@ -41,7 +41,7 @@ Look for `DiagnosticsService` log entries with message:
 Automatic warnings are logged for:
 
 - Rapid memory growth between snapshots
-- High event-loop lag
+- High event-loop lag: a high p95, or a single stall of a second or more
 - Large PTY output buffers
 
 ## Related Files
