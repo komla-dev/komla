@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.1]
+
+### Fixes
+
+- Komla no longer freezes for several seconds at a time when agents outside a Komla terminal, such as Claude Desktop's, report their status, which was most noticeable with many SSH workspaces.
+- Terminals no longer stutter while the "Moved to the Trash" toast with its Undo button is showing.
+- A tab keeps showing that Claude Code is working when Claude moves the session to the background mid-turn, instead of going quiet while the agent carries on.
+- SSH workspaces from another installation whose files are gone no longer make Komla ask the host about them on every sync.
+
 ## [1.2.0]
 
 ### New
