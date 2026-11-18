@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2]
+
+### Fixes
+
+- Moving an SSH workspace to the Trash no longer makes Komla sluggish for several seconds while it deletes the workspace's local copy. The copy is set aside at once and removed quietly in the background.
+
 ## [1.2.1]
 
 ### Fixes
