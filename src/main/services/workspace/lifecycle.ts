@@ -383,9 +383,10 @@ export class WorkspaceLifecycle {
       await removeScratchFolder(workspace);
     }
 
-    // A workspace is not fully deleted until its local copy is gone. Keep
-    // the workspace record when this fails so deletion can be retried safely;
-    // remote cleanup above is idempotent.
+    // A workspace is not fully deleted until its local copy has left its folder; the delete of
+    // the copy finishes in the background, and the sweep of leftovers retries one that fails.
+    // Keep the workspace record when this fails so deletion can be retried safely; remote
+    // cleanup above is idempotent.
     if (isSshWorkspace(workspace)) {
       await localCopyService.remove(workspaceId, workspace.backend);
     }

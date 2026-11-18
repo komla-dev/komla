@@ -6,7 +6,7 @@ import { basename, join, resolve, sep } from 'path';
 import { sanitizeWorktreeProjectSegment } from '../../shared/lib/random-names';
 import { shellQuotePosix } from '../../shared/lib/shell-quote';
 import { createLogger } from '../lib/logger';
-import { removePath } from '../lib/remove-path';
+import { discardPath, emptyDiscardDir } from '../lib/remove-path';
 
 import { KOMLA_FILES_DIR } from './git/git-status';
 import { buildKeptPathsCommand, keptPathRules, parseKeptPaths } from './local-copy-kept-paths';
@@ -23,15 +23,20 @@ const logger = createLogger('LocalCopyService');
 const SYNC_TIMEOUT_MS = 5 * 60_000;
 const LOCAL_COPY_OWNER_FILE = '.komla-local-copy';
 const LOCAL_COPY_PATH_MAX_ATTEMPTS = 25;
-const LOCAL_COPY_REMOVE_OPTIONS = {
-  recursive: true,
-  force: true,
-  maxRetries: 3,
-  retryDelay: 100,
-};
+// Where removed copies wait for their delete. Inside the local-copies folder, so moving one there
+// is instant, and dot-named, so no project folder can have its name.
+const DISCARDED_DIR = '.discarded';
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 type SyncReason = 'prepare' | 'remote-change' | 'initial-sync' | 'retry';
+
+function warnDiscardFailed(discarded: string, error: unknown): void {
+  // The next sweep of leftovers tries again.
+  logger.warn('could not delete a removed local copy', {
+    path: discarded,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
 
 function traceSync(message: string, details: Record<string, unknown>): void {
   if (process.env.KOMLA_DIAGNOSTICS === '1') logger.debug(message, details);
@@ -245,7 +250,7 @@ class LocalCopyService {
         this.localCopyPaths.get(workspaceId) ??
         (backend ? this.getLocalCopyPath(workspaceId, backend) : undefined);
       if (localCopyPath) {
-        await removePath(localCopyPath, LOCAL_COPY_REMOVE_OPTIONS);
+        await discardPath(localCopyPath, this.discardedRoot(), warnDiscardFailed);
         this.pathOwners.delete(localCopyPath);
         this.localCopyPaths.delete(workspaceId);
       }
@@ -270,6 +275,7 @@ class LocalCopyService {
   ): Promise<void> {
     const root = this.localCopyRoot();
     for (const project of await readDirectoryNames(root)) {
+      if (project === DISCARDED_DIR) continue;
       const projectPath = join(root, project);
       for (const folder of await readDirectoryNames(projectPath)) {
         if (stopped()) return;
@@ -278,6 +284,8 @@ class LocalCopyService {
       // Fails, as it should, while the project folder still holds a copy or anything else.
       await rmdir(projectPath).catch(() => undefined);
     }
+    if (stopped()) return;
+    await emptyDiscardDir(this.discardedRoot(), stopped, warnDiscardFailed);
   }
 
   private async removeLeftover(
@@ -293,7 +301,7 @@ class LocalCopyService {
       return;
     }
 
-    const removal = removePath(localCopyPath, LOCAL_COPY_REMOVE_OPTIONS);
+    const removal = discardPath(localCopyPath, this.discardedRoot(), warnDiscardFailed);
     this.leftoverRemovals.set(
       owner,
       removal.catch(() => undefined)
@@ -420,6 +428,10 @@ class LocalCopyService {
 
   private localCopyRoot(): string {
     return resolve(getKomlaBasePath(), 'local-copies');
+  }
+
+  private discardedRoot(): string {
+    return join(this.localCopyRoot(), DISCARDED_DIR);
   }
 
   private validateWorkspaceId(workspaceId: string): void {

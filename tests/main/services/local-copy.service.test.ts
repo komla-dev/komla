@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   readdir: vi.fn((): Promise<unknown[]> => Promise.resolve([])),
   readFile: vi.fn((): Promise<string> => Promise.resolve('')),
   rmdir: vi.fn(() => Promise.resolve()),
+  emptyDiscardDir: vi.fn(() => Promise.resolve()),
   mkdtemp: vi.fn((prefix: string) => Promise.resolve(`${prefix}abc123`)),
   rmTemp: vi.fn(() => Promise.resolve()),
   // Outside a Git work tree, Git lists nothing.
@@ -76,9 +77,12 @@ vi.mock('fs/promises', () => ({
   mkdtemp: mocks.mkdtemp,
   rm: mocks.rmTemp,
 }));
-// Local copies can contain node_modules/electron's .asar files, which only the
-// shared remover deletes correctly inside Electron.
-vi.mock('../../../src/main/lib/remove-path', () => ({ removePath: mocks.rm }));
+// A local copy holds a whole checkout, node_modules included, so it is moved aside and deleted
+// outside main rather than deleted where main waits on it.
+vi.mock('../../../src/main/lib/remove-path', () => ({
+  discardPath: mocks.rm,
+  emptyDiscardDir: mocks.emptyDiscardDir,
+}));
 vi.mock('../../../src/main/services/paths', () => ({
   getKomlaBasePath: () => '/tmp/komla-test',
 }));
@@ -800,7 +804,8 @@ describe.skipIf(process.platform === 'win32')('LocalCopyService', () => {
 
     expect(mocks.rm).toHaveBeenCalledWith(
       '/tmp/komla-test/local-copies/Project-App/agent-local-preview',
-      { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }
+      '/tmp/komla-test/local-copies/.discarded',
+      expect.any(Function)
     );
   });
   describe('removeLeftovers', () => {
@@ -820,14 +825,28 @@ describe.skipIf(process.platform === 'win32')('LocalCopyService', () => {
         `${LOCAL_COPIES}/Project-App/gone`,
         `${LOCAL_COPIES}/Other/gone`,
       ]);
-      expect(mocks.rm).toHaveBeenCalledWith(`${LOCAL_COPIES}/Project-App/gone`, {
-        recursive: true,
-        force: true,
-        maxRetries: 3,
-        retryDelay: 100,
-      });
+      expect(mocks.rm).toHaveBeenCalledWith(
+        `${LOCAL_COPIES}/Project-App/gone`,
+        `${LOCAL_COPIES}/.discarded`,
+        expect.any(Function)
+      );
       // A project folder goes once it is empty; rmdir refuses one that isn't.
       expect(mocks.rmdir).toHaveBeenCalledWith(`${LOCAL_COPIES}/Other`);
+    });
+
+    it('finishes deleting copies discarded before, and takes the discard folder for no project', async () => {
+      layOut({ '.discarded/gone-1a2b': 'workspace-gone' });
+      const { localCopyService } =
+        await import('../../../src/main/services/local-copy.service');
+
+      await localCopyService.removeLeftovers(() => false);
+
+      expect(mocks.rm).not.toHaveBeenCalled();
+      expect(mocks.emptyDiscardDir).toHaveBeenCalledWith(
+        `${LOCAL_COPIES}/.discarded`,
+        expect.any(Function),
+        expect.any(Function)
+      );
     });
 
     it('leaves a copy whose marker does not name a workspace', async () => {
