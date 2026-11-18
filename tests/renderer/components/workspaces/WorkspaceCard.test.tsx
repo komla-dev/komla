@@ -2669,6 +2669,12 @@ describe('WorkspaceCard', () => {
       windowId: 'window-1',
     });
     workspacesState.workspaces = [workspace];
+    // The highlight clears once the workspace has opened, which a loaded machine can reach
+    // before the click resolves, so read it as the open starts.
+    let highlightedWhenOpened: string | null = null;
+    workspacesState.selectWorkspace.mockImplementationOnce(() => {
+      highlightedWhenOpened = workspacesState.highlightedWorkspaceId;
+    });
 
     render(<WorkspaceCard workspace={workspace} />);
     await user.click(
@@ -2676,10 +2682,10 @@ describe('WorkspaceCard', () => {
     );
 
     // The card shows selected first; its workspace opens once that has painted.
-    expect(workspacesState.highlightedWorkspaceId).toBe(workspace.id);
     await vi.waitFor(() =>
       expect(workspacesState.selectWorkspace).toHaveBeenCalledWith(workspace.id)
     );
+    expect(highlightedWhenOpened).toBe(workspace.id);
     expect(screen.queryByTestId('workspace-info-content')).not.toBeInTheDocument();
   });
 
