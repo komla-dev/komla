@@ -9,6 +9,7 @@ import { join, sep } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import {
   app,
+  autoUpdater as nativeAutoUpdater,
   BrowserWindow,
   dialog,
   Menu,
@@ -1005,8 +1006,15 @@ app.on('before-quit', (event) => {
   // The quit the sequence asks for itself, once every phase is over, and a quit asked for again
   // while it is stopping things, which goes through so that a step that never settles, such as
   // one waiting on an unreachable SSH host, can't leave Komla running with its windows hidden.
-  const { kind } = quitSequence.state();
-  if (kind === 'done' || kind === 'cleaning-up') return;
+  if (quitSequence.letsQuitThrough()) return;
   event.preventDefault();
   quitSequence.request();
 });
+
+// Restarting to update on macOS closes every window, which starts quitting, and then quits again
+// itself. Let through, that second quit would end Komla before it saved which workspaces were
+// running, so the next launch wouldn't offer to restart them. An install that fails quits no more.
+if (process.platform === 'darwin') {
+  nativeAutoUpdater.on('before-quit-for-update', () => quitSequence.expectQuitFromApp());
+  nativeAutoUpdater.on('error', () => quitSequence.forgetQuitFromApp());
+}

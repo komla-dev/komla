@@ -9,6 +9,8 @@
  * ```
  */
 
+import { EventEmitter } from 'node:events';
+
 import { vi } from 'vitest';
 
 /**
@@ -378,6 +380,7 @@ export function mockElectron(overrides: Partial<MockElectronModule> = {}): MockE
       register: vi.fn(() => true),
       unregister: vi.fn(),
     },
+    autoUpdater: new EventEmitter(),
     ...overrides,
   };
 }
@@ -413,4 +416,6 @@ export interface MockElectronModule {
     register: ReturnType<typeof vi.fn>;
     unregister: ReturnType<typeof vi.fn>;
   };
+  /** Electron's own updater, which electron-updater drives on macOS. */
+  autoUpdater: EventEmitter;
 }

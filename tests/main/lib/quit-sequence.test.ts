@@ -223,4 +223,74 @@ describe('createQuitSequence', () => {
     expect(() => sequence.request()).toThrow('no dialog');
     expect(sequence.state()).toEqual({ kind: 'running' });
   });
+
+  describe('letsQuitThrough', () => {
+    it('holds a quit until the phases are over, then lets it through', async () => {
+      const pending = createDeferred<void>();
+      const { sequence } = setUp(() => [{ name: 'only', steps: { a: () => pending.promise } }]);
+
+      expect(sequence.letsQuitThrough()).toBe(false);
+      sequence.request();
+      pending.resolve();
+      await turn();
+
+      expect(sequence.letsQuitThrough()).toBe(true);
+    });
+
+    it('lets a quit asked for again while the phases run through, as for a step that never settles', () => {
+      const { sequence } = setUp(() => [
+        { name: 'stuck', steps: { a: () => createDeferred<void>().promise } },
+      ]);
+
+      sequence.request();
+
+      expect(sequence.letsQuitThrough()).toBe(true);
+    });
+
+    it('holds the one quit the app said it would ask for while the phases run, as macOS updates do', async () => {
+      const pending = createDeferred<void>();
+      const { sequence, log } = setUp((log) => [
+        { name: 'first', steps: { a: () => pending.promise } },
+        { name: 'save', steps: { save: () => log.push('save') } },
+      ]);
+
+      sequence.expectQuitFromApp();
+      expect(sequence.letsQuitThrough()).toBe(false);
+      sequence.request();
+
+      expect(sequence.letsQuitThrough()).toBe(false);
+      expect(sequence.letsQuitThrough()).toBe(true);
+
+      pending.resolve();
+      await turn();
+      expect(log).toEqual(['save', 'quit']);
+    });
+
+    it('forgets the quit the app expected once told it no longer comes', () => {
+      const { sequence } = setUp(() => [
+        { name: 'stuck', steps: { a: () => createDeferred<void>().promise } },
+      ]);
+
+      sequence.expectQuitFromApp();
+      sequence.forgetQuitFromApp();
+      sequence.request();
+
+      expect(sequence.letsQuitThrough()).toBe(true);
+    });
+
+    it('forgets the quit the app expected once the user declines quitting', () => {
+      let answer = false;
+      const { sequence } = setUp(
+        () => [{ name: 'stuck', steps: { a: () => createDeferred<void>().promise } }],
+        { confirm: () => answer }
+      );
+
+      sequence.expectQuitFromApp();
+      sequence.request();
+      answer = true;
+      sequence.request();
+
+      expect(sequence.letsQuitThrough()).toBe(true);
+    });
+  });
 });

@@ -29,6 +29,19 @@ export interface QuitSequence {
   state(): QuitState;
   /** Asks to quit. Only a running app takes it: one already on its way out carries on. */
   request(): void;
+  /**
+   * Whether a quit Electron is about to do goes ahead now. One before the phases are over waits
+   * for them, except one asked for again while they run, which goes through so that a step that
+   * never settles can't keep the app from quitting.
+   */
+  letsQuitThrough(): boolean;
+  /**
+   * The app itself will ask to quit once more while the phases run, and that quit waits for them
+   * too. A macOS update does: it closes every window, which starts quitting, then quits again.
+   */
+  expectQuitFromApp(): void;
+  /** The quit the app said it would ask for won't come, as when an update fails to install. */
+  forgetQuitFromApp(): void;
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
@@ -49,6 +62,7 @@ export function createQuitSequence(options: {
   onStepFailed: (failure: QuitStepFailure) => void;
 }): QuitSequence {
   let state: QuitState = { kind: 'running' };
+  let quitFromAppExpected = false;
 
   const report = (failure: QuitStepFailure): void => {
     try {
@@ -94,9 +108,25 @@ export function createQuitSequence(options: {
       try {
         confirmed = options.confirm();
       } finally {
-        if (!confirmed) state = { kind: 'running' };
+        if (!confirmed) {
+          state = { kind: 'running' };
+          quitFromAppExpected = false;
+        }
       }
       if (confirmed) void cleanUp();
+    },
+    letsQuitThrough() {
+      if (state.kind === 'done') return true;
+      if (state.kind !== 'cleaning-up') return false;
+      if (!quitFromAppExpected) return true;
+      quitFromAppExpected = false;
+      return false;
+    },
+    expectQuitFromApp() {
+      quitFromAppExpected = true;
+    },
+    forgetQuitFromApp() {
+      quitFromAppExpected = false;
     },
   };
 }

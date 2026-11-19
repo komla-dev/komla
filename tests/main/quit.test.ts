@@ -291,6 +291,7 @@ describe('quitting', () => {
     quit.log.length = 0;
     quit.failing.clear();
     quit.confirmed = true;
+    electronMock.autoUpdater.removeAllListeners();
     const window = createMockBrowserWindow({ hide: vi.fn(quit.step('window.hide')) });
     (
       electronMock.BrowserWindow as unknown as { getAllWindows: ReturnType<typeof vi.fn> }
@@ -402,6 +403,39 @@ describe('quitting', () => {
         { phase: 'stop and save', step: 'workspaces', error: 'Error: workspace.dispose failed' },
       ],
     ]);
+  });
+
+  // Restarting to update closes every window, which quits, and then the updater quits again
+  // itself. Let through, that quit would end Komla before it saved its workspaces.
+  it('waits for everything to stop when a macOS update quits again while it stops things', async () => {
+    await launch('darwin');
+    electronMock.autoUpdater.emit('before-quit-for-update');
+    requestQuit();
+
+    expect(requestQuit()).toBe(true);
+    quit.release('workspaceTrash.stop');
+    await turn();
+    quit.release('pty.killAll');
+    await turn();
+    expect(quit.log).toEqual([...BEFORE_THE_TRASH, ...AFTER_THE_TRASH, ...AFTER_THE_TERMINALS]);
+  });
+
+  it('lets a quit asked for again go through once the update failed to install', async () => {
+    await launch('darwin');
+    electronMock.autoUpdater.emit('before-quit-for-update');
+    electronMock.autoUpdater.emit('error', new Error('Squirrel could not install'));
+    requestQuit();
+
+    expect(requestQuit()).toBe(false);
+  });
+
+  it('still lets a quit the user asks for again go through after the update quit again', async () => {
+    await launch('darwin');
+    electronMock.autoUpdater.emit('before-quit-for-update');
+    requestQuit();
+    requestQuit();
+
+    expect(requestQuit()).toBe(false);
   });
 
   it('lets through the quit it asks for once everything has stopped', async () => {

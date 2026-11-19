@@ -70,8 +70,8 @@ describe('the quit sequence', () => {
 
     expect(calls.toSorted()).toEqual([
       'event.preventDefault',
+      'quitSequence.letsQuitThrough',
       'quitSequence.request',
-      'quitSequence.state',
     ]);
   });
 
