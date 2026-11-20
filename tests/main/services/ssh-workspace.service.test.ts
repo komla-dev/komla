@@ -6544,8 +6544,10 @@ describe("sshWorkspaceService", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(
-          "remote project name collides with a different Git repo",
+          `[komla] the copy of this project on the SSH host, at ${projectRepoRoot}, clones alice@example.com:repo.git, not bob@example.com:repo.git. If both are the same repository, e.g. one that moved, make their origin URLs match`,
         );
+        // The message names the copy's path already.
+        expect(result.stderr).not.toContain("path: ");
         expect(
           runGit(
             ["config", "--get", "remote.origin.url"],
@@ -6557,6 +6559,111 @@ describe("sshWorkspaceService", () => {
       }
     },
   );
+
+  itWithPosixShell(
+    "leaves the credentials in either origin URL out of a collision error",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "komla-ssh-credential-collision-"));
+
+      try {
+        const { sshWorkspaceService } =
+          await import("../../../src/main/services/ssh-workspace.service");
+        const plan = sshWorkspaceService.createWorkspacePlan({
+          hostId: "ssh-dev",
+          gitUrl: "https://x-access-token:new-secret@github.com/komla-dev/komla.git",
+          projectId: "new-project-id",
+          projectName: "credential-collision",
+          branchName: "agent/new-work",
+          baseBranch: "main",
+          resolvedBasePath: join(root, ".komla"),
+        });
+        const projectRepoRoot = join(plan.backend.remoteRepoPath, "..");
+        mkdirSync(projectRepoRoot, { recursive: true });
+        runGit(["init", "--bare", plan.backend.remoteRepoPath]);
+        runGit(
+          [
+            "config",
+            "remote.origin.url",
+            "https://old-secret@github.com/tordrt/komla.git",
+          ],
+          plan.backend.remoteRepoPath,
+        );
+        mkdirSync(plan.backend.remoteDirectory, { recursive: true });
+
+        const setupCommand = await buildLazySetupCommand(plan.backend);
+        const result = spawnSync("/bin/sh", ["-c", setupCommand], {
+          encoding: "utf8",
+        });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `clones https://github.com/tordrt/komla.git, not https://github.com/komla-dev/komla.git.`,
+        );
+        expect(result.stderr).not.toContain("old-secret");
+        expect(result.stderr).not.toContain("new-secret");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  itWithPosixShell.each([
+    {
+      name: "keeps the user names that tell two SSH origins apart",
+      existing: "ssh://alice@example.com/repo.git",
+      requested: "ssh://bob@example.com/repo.git",
+      shown:
+        "clones ssh://alice@example.com/repo.git, not ssh://bob@example.com/repo.git.",
+    },
+    {
+      name: "keeps an SSH origin's user name but not its password",
+      existing: "ssh://ci:old-secret@git.example.com/team/old.git",
+      requested: "ssh://ci@git.example.com/team/new.git",
+      shown:
+        "clones ssh://ci@git.example.com/team/old.git, not ssh://ci@git.example.com/team/new.git.",
+    },
+    {
+      name: "leaves out a token given as the user name of a self-hosted forge's origin",
+      existing: "HTTPS://ghp_secret@ghe.example.com:8443/team/old.git",
+      requested: "https://ci:other-secret@ghe.example.com:8443/team/new.git",
+      shown:
+        "clones HTTPS://ghe.example.com:8443/team/old.git, not https://ghe.example.com:8443/team/new.git.",
+    },
+  ])("$name in a collision error", async ({ existing, requested, shown }) => {
+    const root = mkdtempSync(join(tmpdir(), "komla-ssh-user-collision-"));
+
+    try {
+      const { sshWorkspaceService } =
+        await import("../../../src/main/services/ssh-workspace.service");
+      const plan = sshWorkspaceService.createWorkspacePlan({
+        hostId: "ssh-dev",
+        gitUrl: requested,
+        projectId: "new-project-id",
+        projectName: "user-collision",
+        branchName: "agent/new-work",
+        baseBranch: "main",
+        resolvedBasePath: join(root, ".komla"),
+      });
+      mkdirSync(join(plan.backend.remoteRepoPath, ".."), { recursive: true });
+      runGit(["init", "--bare", plan.backend.remoteRepoPath]);
+      runGit(
+        ["config", "remote.origin.url", existing],
+        plan.backend.remoteRepoPath,
+      );
+      mkdirSync(plan.backend.remoteDirectory, { recursive: true });
+
+      const setupCommand = await buildLazySetupCommand(plan.backend);
+      const result = spawnSync("/bin/sh", ["-c", setupCommand], {
+        encoding: "utf8",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(shown);
+      expect(result.stderr).not.toContain("secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   itWithPosixShell(
     "refuses a Git URL that git would read as an option",
@@ -6627,7 +6734,7 @@ describe("sshWorkspaceService", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(
-          "remote project name collides with a different Git repo",
+          "[komla] the copy of this project on the SSH host, at ",
         );
         expect(
           runGit(
@@ -6680,7 +6787,7 @@ describe("sshWorkspaceService", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(
-          "remote project name collides with a different Git repo",
+          "[komla] the copy of this project on the SSH host, at ",
         );
         expect(readFileSync(join(projectRepoRoot, ".project-id"), "utf8")).toBe(
           "old-project-id\n",
@@ -6765,7 +6872,7 @@ describe("sshWorkspaceService", () => {
       "/home/devuser/.komla/repos/komla/.project-id",
     );
     expect(setupCommand).toContain(
-      "remote project name collides with a different Git repo",
+      "[komla] the copy of this project on the SSH host, at ",
     );
     expect(setupCommand).toContain("origin/release");
   });
@@ -7951,8 +8058,7 @@ describe("sshWorkspaceService", () => {
 
   it("shows a concise setup error without the generated SSH command", async () => {
     const stderr = [
-      "\u001b[31m[komla] remote project name collides with a different Git repo\u001b[0m",
-      "path: /home/dev/.komla/repos/komla",
+      "\u001b[31m[komla] the copy of this project on the SSH host, at /home/dev/.komla/repos/komla, clones git@github.com:tordrt/komla.git, not git@github.com:komla-dev/komla.git. If both are the same repository, e.g. one that moved, make their origin URLs match\u001b[0m",
     ].join("\n");
     const setupError = Object.assign(
       new Error(
@@ -7977,7 +8083,8 @@ describe("sshWorkspaceService", () => {
     await expect(
       sshWorkspaceService.ensureWorkspaceReady(plan.backend),
     ).rejects.toMatchObject({
-      message: "Remote project name collides with a different Git repo.",
+      message:
+        "The copy of this project on the SSH host, at /home/dev/.komla/repos/komla, clones git@github.com:tordrt/komla.git, not git@github.com:komla-dev/komla.git. If both are the same repository, e.g. one that moved, make their origin URLs match.",
     });
   });
 

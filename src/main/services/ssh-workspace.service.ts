@@ -2514,6 +2514,32 @@ class SshWorkspaceService {
       '    printf "%s://%s/%s\\n" "$transport" "$authority" "$path"',
       '  fi',
       '}',
+      // A URL's password goes, as in ssh://user:secret@host/path. Over http(s) its user name goes
+      // too, since forges take a token there, as in https://<token>@host/path. Over ssh the user
+      // name names an account and can be all that tells two origins apart. An scp-like URL such
+      // as git@github.com:org/repo.git names only a user.
+      'without_git_url_credentials() {',
+      '  case "$1" in',
+      '    *://*)',
+      '      cred_scheme=${1%%://*}',
+      '      cred_rest=${1#*://}',
+      '      cred_authority=${cred_rest%%/*}',
+      '      cred_path=${cred_rest#"$cred_authority"}',
+      '      cred_host=${cred_authority##*@}',
+      '      cred_user=',
+      '      if [ "$cred_authority" != "$cred_host" ]; then',
+      '        cred_user=${cred_authority%@*}',
+      '        cred_user=${cred_user%%:*}',
+      '      fi',
+      '      case "$(printf "%s" "$cred_scheme" | tr "[:upper:]" "[:lower:]")" in',
+      '        http|https) cred_user= ;;',
+      '      esac',
+      '      if [ -n "$cred_user" ]; then cred_host="$cred_user@$cred_host"; fi',
+      '      printf "%s://%s%s\\n" "$cred_scheme" "$cred_host" "$cred_path"',
+      '      ;;',
+      '    *) printf "%s\\n" "$1" ;;',
+      '  esac',
+      '}',
       `project_id_path=${shellQuotePosix(projectIdPath)}`,
       `project_name_path=${shellQuotePosix(projectNamePath)}`,
       `git_url_path=${shellQuotePosix(gitUrlPath)}`,
@@ -2546,8 +2572,12 @@ class SshWorkspaceService {
       '  existing_git_identity=$(normalize_git_url "$existing_git_url")',
       '  git_url_identity=$(normalize_git_url "$git_url")',
       '  if [ "$existing_git_identity" != "$git_url_identity" ]; then',
-      `    printf "\\033[31m[komla] remote project name collides with a different Git repo\\033[0m\\n" >&2`,
-      `    printf "path: %s\\n" ${shellQuotePosix(projectRepoRoot)} >&2`,
+      // A repository that moved, e.g. to another GitHub organization, keeps working from its old
+      // URL through a redirect, so name both URLs and the copy: matching them is the fix. The
+      // message is shown and logged, so it leaves out any credentials in the URLs.
+      `    printf "\\033[31m[komla] the copy of this project on the SSH host, at %s, clones %s, not %s. If both are the same repository, e.g. one that moved, make their origin URLs match\\033[0m\\n" ${shellQuotePosix(
+        projectRepoRoot
+      )} "$(without_git_url_credentials "$existing_git_url")" "$(without_git_url_credentials "$git_url")" >&2`,
       '    exit 1',
       '  fi',
       '  if [ "$existing_git_url" != "$git_url" ]; then',
