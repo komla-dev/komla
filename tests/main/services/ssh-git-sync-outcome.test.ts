@@ -377,6 +377,104 @@ describe('sshWorkspaceGit sync outcomes', () => {
       );
     });
 
+    describe('push', () => {
+      /** Publishes `feature`, with a commit of its own, to a bare origin that tracks it. */
+      function publish(): string {
+        commit('published.txt', 'published\n', 'published change');
+        const originPath = join(root, 'origin.git');
+        execFileSync('git', ['init', '--quiet', '--bare', originPath], { stdio: 'pipe' });
+        git('remote', 'add', 'origin', originPath);
+        git('push', '--quiet', '-u', 'origin', 'feature');
+        return originPath;
+      }
+
+      itWithPosixShell("replaces origin's copy of a branch rebased since it was pushed", async () => {
+        const originPath = publish();
+        advanceMain();
+        git('rebase', '--quiet', 'main');
+
+        expect(await sshWorkspaceGit.push(backend)).toEqual({
+          success: true,
+          message: "Replaced origin's copy of feature",
+        });
+        expect(
+          execFileSync('git', ['-C', originPath, 'rev-parse', 'feature'], {
+            encoding: 'utf8',
+          }).trim()
+        ).toBe(git('rev-parse', 'HEAD'));
+      });
+
+      itWithPosixShell('replaces a rebased branch that tracks no upstream', async () => {
+        const originPath = publish();
+        git('branch', '--unset-upstream');
+        advanceMain();
+        git('rebase', '--quiet', 'main');
+
+        expect((await sshWorkspaceGit.push(backend)).success).toBe(true);
+        expect(
+          execFileSync('git', ['-C', originPath, 'rev-parse', 'feature'], {
+            encoding: 'utf8',
+          }).trim()
+        ).toBe(git('rev-parse', 'HEAD'));
+      });
+
+      itWithPosixShell('keeps fetched origin commits the branch lacks', async () => {
+        const originPath = publish();
+        const otherPath = join(root, 'other');
+        execFileSync('git', ['clone', '--quiet', '--branch', 'feature', originPath, otherPath], {
+          stdio: 'pipe',
+        });
+        writeFileSync(join(otherPath, 'other.txt'), 'other\n');
+        const other = (...args: string[]) =>
+          execFileSync('git', ['-C', otherPath, ...args], {
+            stdio: 'pipe',
+            env: { ...process.env, ...GIT_ENV },
+          });
+        other('add', 'other.txt');
+        other('commit', '--quiet', '-m', 'other change');
+        other('push', '--quiet', 'origin', 'feature');
+        const otherHead = other('rev-parse', 'HEAD').toString().trim();
+        git('fetch', '--quiet', 'origin');
+        commit('local.txt', 'local\n', 'local change');
+
+        expect(await sshWorkspaceGit.push(backend)).toEqual({
+          success: false,
+          message: 'Remote has new commits',
+          errorCode: 'rejected',
+        });
+        expect(
+          execFileSync('git', ['-C', originPath, 'rev-parse', 'feature'], {
+            encoding: 'utf8',
+          }).trim()
+        ).toBe(otherHead);
+      });
+
+      itWithPosixShell('is rejected when origin has commits the last fetch missed', async () => {
+        const originPath = publish();
+        const otherPath = join(root, 'other');
+        execFileSync('git', ['clone', '--quiet', '--branch', 'feature', originPath, otherPath], {
+          stdio: 'pipe',
+        });
+        writeFileSync(join(otherPath, 'other.txt'), 'other\n');
+        const other = (...args: string[]) =>
+          execFileSync('git', ['-C', otherPath, ...args], {
+            stdio: 'pipe',
+            env: { ...process.env, ...GIT_ENV },
+          });
+        other('add', 'other.txt');
+        other('commit', '--quiet', '-m', 'other change');
+        other('push', '--quiet', 'origin', 'feature');
+        advanceMain();
+        git('rebase', '--quiet', 'main');
+
+        expect(await sshWorkspaceGit.push(backend)).toEqual({
+          success: false,
+          message: 'Remote has new commits',
+          errorCode: 'rejected',
+        });
+      });
+    });
+
     describe('pull', () => {
       let originPath: string;
 

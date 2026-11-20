@@ -138,7 +138,11 @@ impl RepositorySnapshot {
         let remote_branch = format!("origin/{current_branch}");
         let has_remote = git_succeeds(working_tree, &["rev-parse", "--verify", &remote_branch]);
         let (behind_remote, unpushed_commits) = if has_remote {
-            revision_counts(working_tree, &remote_branch, &current_branch)
+            let (behind, unpushed) = revision_counts(working_tree, &remote_branch, &current_branch);
+            (
+                missing_remote_commits(working_tree, &remote_branch, &current_branch, behind),
+                unpushed,
+            )
         } else {
             (0, 0)
         };
@@ -473,6 +477,28 @@ fn revision_counts(working_tree: &Path, left: &str, right: &str) -> (u64, u64) {
         .and_then(|item| item.parse().ok())
         .unwrap_or(0);
     (left_count, right_count)
+}
+
+// Origin's commits whose changes the branch lacks. A branch rebased after it was pushed has
+// copies of origin's commits, not the commits themselves, and those copies count as here.
+fn missing_remote_commits(working_tree: &Path, remote: &str, branch: &str, behind: u64) -> u64 {
+    if behind == 0 {
+        return 0;
+    }
+    let range = format!("{remote}...{branch}");
+    git_text(
+        working_tree,
+        &[
+            "rev-list",
+            "--left-only",
+            "--cherry-pick",
+            "--count",
+            &range,
+        ],
+    )
+    .ok()
+    .and_then(|value| value.trim().parse().ok())
+    .unwrap_or(behind)
 }
 
 fn append_untracked_numstat(working_tree: &Path, status: &[u8], numstat: &mut Vec<u8>) -> bool {

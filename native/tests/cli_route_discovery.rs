@@ -622,6 +622,28 @@ fn notify_has_a_safety_timeout_when_hook_stdin_stays_empty() {
     assert_eq!(fs::read_dir(inbox).unwrap().count(), 1);
 }
 
+fn read_git_snapshot(repository: &std::path::Path) -> serde_json::Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_komla"))
+        .args([
+            "git",
+            "snapshot",
+            "-C",
+            repository.to_str().unwrap(),
+            "--target",
+            "main",
+        ])
+        .env_clear()
+        .envs(windows_essentials())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "komla git snapshot failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
 #[test]
 fn git_snapshot_reads_the_repository_without_a_desktop_connection() {
     let temporary = TempDir::new().unwrap();
@@ -636,26 +658,7 @@ fn git_snapshot_reads_the_repository_without_a_desktop_connection() {
     git(&repository, &["switch", "-c", "feature"]);
     fs::write(repository.join("tracked.txt"), "changed\n").unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_komla"))
-        .args([
-            "git",
-            "snapshot",
-            "-C",
-            repository.to_str().unwrap(),
-            "--target",
-            "main",
-        ])
-        .env_clear()
-        .envs(windows_essentials())
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "komla git snapshot failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let snapshot: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let snapshot = read_git_snapshot(&repository);
     assert!(snapshot["observedAt"].as_u64().unwrap() > 0);
     assert_eq!(snapshot["branch"]["currentBranch"], "feature");
     assert_eq!(snapshot["branch"]["targetBranch"], "main");
@@ -665,6 +668,54 @@ fn git_snapshot_reads_the_repository_without_a_desktop_connection() {
     assert!(snapshot["statusB64"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
+}
+
+#[test]
+fn git_snapshot_counts_only_origin_commits_whose_changes_the_branch_lacks() {
+    let temporary = TempDir::new().unwrap();
+    let repository = temporary.path().join("worktree");
+    fs::create_dir_all(&repository).unwrap();
+    git(&repository, &["init", "-b", "main"]);
+    git(&repository, &["config", "user.email", "komla@example.com"]);
+    git(&repository, &["config", "user.name", "Komla Test"]);
+    fs::write(repository.join("base.txt"), "base\n").unwrap();
+    git(&repository, &["add", "base.txt"]);
+    git(&repository, &["commit", "-m", "base"]);
+    git(&repository, &["switch", "-c", "feature"]);
+    fs::write(repository.join("feature.txt"), "feature\n").unwrap();
+    git(&repository, &["add", "feature.txt"]);
+    git(&repository, &["commit", "-m", "feature"]);
+    // Pushed, then rebased onto a main that moved on.
+    git(
+        &repository,
+        &["update-ref", "refs/remotes/origin/feature", "HEAD"],
+    );
+    git(&repository, &["switch", "main"]);
+    fs::write(repository.join("main.txt"), "main\n").unwrap();
+    git(&repository, &["add", "main.txt"]);
+    git(&repository, &["commit", "-m", "main"]);
+    git(&repository, &["switch", "feature"]);
+    git(&repository, &["rebase", "--quiet", "main"]);
+
+    let snapshot = read_git_snapshot(&repository);
+    assert_eq!(snapshot["branch"]["hasRemote"], true);
+    assert_eq!(snapshot["branch"]["behindRemote"], 0);
+    assert_eq!(snapshot["branch"]["unpushedCommits"], 2);
+
+    // A commit pushed from elsewhere is one the branch really lacks.
+    git(&repository, &["switch", "--detach", "origin/feature"]);
+    fs::write(repository.join("elsewhere.txt"), "elsewhere\n").unwrap();
+    git(&repository, &["add", "elsewhere.txt"]);
+    git(&repository, &["commit", "-m", "elsewhere"]);
+    git(
+        &repository,
+        &["update-ref", "refs/remotes/origin/feature", "HEAD"],
+    );
+    git(&repository, &["switch", "feature"]);
+
+    let snapshot = read_git_snapshot(&repository);
+    assert_eq!(snapshot["branch"]["behindRemote"], 1);
+    assert_eq!(snapshot["branch"]["unpushedCommits"], 2);
 }
 
 #[test]

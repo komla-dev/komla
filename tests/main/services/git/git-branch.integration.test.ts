@@ -496,6 +496,70 @@ describe('GitBranchService integration', () => {
     return localTargetCommit;
   }
 
+  it("counts only origin's commits whose changes the branch lacks", async () => {
+    await runGit(repoPath, ['branch', '-M', 'main']);
+    await runGit(repoPath, ['checkout', '-b', 'topic']);
+    writeFileSync(join(repoPath, 'topic.txt'), 'topic\n');
+    await runGit(repoPath, ['add', 'topic.txt']);
+    await runGit(repoPath, ['commit', '-m', 'topic']);
+    // Pushed, then rebased onto a main that moved on.
+    await runGit(repoPath, ['update-ref', 'refs/remotes/origin/topic', 'HEAD']);
+    await runGit(repoPath, ['checkout', 'main']);
+    writeFileSync(join(repoPath, 'main.txt'), 'main\n');
+    await runGit(repoPath, ['add', 'main.txt']);
+    await runGit(repoPath, ['commit', '-m', 'main']);
+    await runGit(repoPath, ['checkout', 'topic']);
+    await runGit(repoPath, ['rebase', '--quiet', 'main']);
+
+    const { gitBranchService } = await import('../../../../src/main/services/git/git-branch');
+    expect(await gitBranchService.getBranchQuickStatus(repoPath)).toMatchObject({
+      hasRemote: true,
+      behindRemote: 0,
+      unpushedCommits: 2,
+    });
+
+    // A commit pushed from elsewhere is one the branch really lacks.
+    await runGit(repoPath, ['checkout', '--detach', 'origin/topic']);
+    writeFileSync(join(repoPath, 'elsewhere.txt'), 'elsewhere\n');
+    await runGit(repoPath, ['add', 'elsewhere.txt']);
+    await runGit(repoPath, ['commit', '-m', 'elsewhere']);
+    await runGit(repoPath, ['update-ref', 'refs/remotes/origin/topic', 'HEAD']);
+    await runGit(repoPath, ['checkout', 'topic']);
+
+    expect(await gitBranchService.getBranchQuickStatus(repoPath)).toMatchObject({
+      behindRemote: 1,
+      unpushedCommits: 2,
+    });
+  });
+
+  it("compares patches only against origin's copy of the branch", async () => {
+    await runGit(repoPath, ['branch', '-M', 'main']);
+    await runGit(repoPath, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    writeFileSync(join(repoPath, 'main.txt'), 'main\n');
+    await runGit(repoPath, ['add', 'main.txt']);
+    await runGit(repoPath, ['commit', '-m', 'main']);
+    await runGit(repoPath, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+    await runGit(repoPath, ['reset', '--hard', 'HEAD~1']);
+    // Tracks origin/main, as a branch made from it does, and is behind it.
+    await runGit(repoPath, ['remote', 'add', 'origin', join(repoPath, 'unused-origin')]);
+    await runGit(repoPath, ['checkout', '-b', 'topic']);
+    await runGit(repoPath, ['config', 'branch.topic.remote', 'origin']);
+    await runGit(repoPath, ['config', 'branch.topic.merge', 'refs/heads/main']);
+    writeFileSync(join(repoPath, 'topic.txt'), 'topic\n');
+    await runGit(repoPath, ['add', 'topic.txt']);
+    await runGit(repoPath, ['commit', '-m', 'topic']);
+
+    const { gitExec } = await import('../../../../src/main/services/git/git-exec');
+    const { gitBranchService } = await import('../../../../src/main/services/git/git-branch');
+    const execGit = vi.spyOn(gitExec, 'execGitAsync');
+
+    expect(await gitBranchService.getBranchQuickStatus(repoPath)).toMatchObject({
+      behindRemote: 1,
+      unpushedCommits: 1,
+    });
+    expect(execGit.mock.calls.some(([, args]) => args.includes('--cherry-pick'))).toBe(false);
+  });
+
   it('fast-forwards a behind target and rebases onto it', async () => {
     await createTopicBehindFetchedTarget();
 

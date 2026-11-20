@@ -2122,7 +2122,39 @@ class GitBranchService {
 
     // Single rev-list call for both ahead and behind remote
     const { ahead, behind } = await gitExec.getAheadBehind(worktreePath, currentBranch, upstream);
-    return { hasRemote: true, unpushed: ahead, behind };
+    return {
+      hasRemote: true,
+      unpushed: ahead,
+      behind: await this.countMissingRemoteCommits(worktreePath, upstream, currentBranch, behind),
+    };
+  }
+
+  /**
+   * Origin's commits whose changes the branch lacks. A branch rebased after it was pushed has
+   * copies of origin's commits, not the commits themselves, and those copies count as here.
+   * Only origin's copy of the branch is compared: against another upstream, such as origin's
+   * target, being behind is routine and comparing patches would cost every status refresh.
+   */
+  private async countMissingRemoteCommits(
+    worktreePath: string,
+    upstream: string,
+    branch: string,
+    behind: number
+  ): Promise<number> {
+    if (behind === 0 || upstream !== `origin/${branch}`) return behind;
+    try {
+      const output = await gitExec.execGitAsync(worktreePath, [
+        'rev-list',
+        '--left-only',
+        '--cherry-pick',
+        '--count',
+        `${upstream}...${branch}`,
+      ]);
+      const missing = parseInt(output, 10);
+      return Number.isNaN(missing) ? behind : missing;
+    } catch {
+      return behind;
+    }
   }
 
   /**
