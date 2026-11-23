@@ -4536,6 +4536,34 @@ describe('WorkspaceService', () => {
           expect(workspace.branchedFrom).toBe('agent/source-branch');
         });
 
+        it('leaves the target on the detected branch when the project has none', async () => {
+          vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
+          mockProjectService.get.mockReturnValue(
+            createProject({ id: 'project-1', baseBranch: undefined })
+          );
+          mockGitService.getMainBranch.mockResolvedValueOnce('main');
+
+          const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+          const workspace = await workspaceService.create({
+            mode: 'worktree',
+            name: 'Feature',
+            branchName: 'my-feature',
+            projectId: 'project-1',
+            baseBranch: 'agent/source-branch',
+          });
+
+          expect(mockGitService.createWorktree).toHaveBeenCalledWith(
+            expect.any(String),
+            'my-feature',
+            expect.any(String),
+            'agent/source-branch',
+            expect.any(Object)
+          );
+          expect(workspace.baseBranch).toBe('main');
+          expect(workspace.branchedFrom).toBe('agent/source-branch');
+        });
+
         it('is set on the deferred-provisioning placeholder when baseBranch differs', async () => {
           vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
           mockConfigService.get.mockReturnValue({ autoNameBranches: true });
@@ -7851,7 +7879,7 @@ describe('WorkspaceService', () => {
             location: { kind: 'ssh', hostId: 'ssh-dev' },
           })
         ).rejects.toMatchObject({
-          detail: { projectId: 'project-1', branches: ['release', 'feature/login'] },
+          detail: { projectId: 'project-1', branches: ['main', 'release', 'feature/login'] },
         });
       });
 
@@ -7901,7 +7929,7 @@ describe('WorkspaceService', () => {
         expect(workspace.branchedFrom).toBe('origin/release');
       });
 
-      it('normalizes a qualified SSH base branch when the project target is missing', async () => {
+      it('targets the host default, not a qualified SSH base branch, when the project has no target', async () => {
         vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
         mockSshWorkspaceService.ensureWorkspaceReady.mockResolvedValueOnce({
           createdBranch: true,
@@ -7922,11 +7950,12 @@ describe('WorkspaceService', () => {
 
         expect(workspace.backend).toMatchObject({
           kind: 'ssh',
-          baseBranch: 'release',
           startPoint: 'origin/release',
           defaultBranch: 'master',
         });
-        expect(workspace.baseBranch).toBe('release');
+        expect(workspace.backend).not.toHaveProperty('baseBranch');
+        expect(workspace.baseBranch).toBeUndefined();
+        expect(workspace.branchedFrom).toBe('origin/release');
         expect(mockProjectService.update).not.toHaveBeenCalled();
         expect(mockProject.baseBranch).toBeUndefined();
 
@@ -7938,7 +7967,7 @@ describe('WorkspaceService', () => {
         });
       });
 
-      it('preserves a deferred explicit SSH base branch when another workspace resolves the remote default', async () => {
+      it('targets the remote default, not a deferred SSH base branch, when the project has no target', async () => {
         vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
         mockSshWorkspaceService.ensureWorkspaceReady
           .mockResolvedValueOnce({
@@ -7975,12 +8004,13 @@ describe('WorkspaceService', () => {
         });
         await vi.advanceTimersByTimeAsync(0);
 
-        expect(workspace.baseBranch).toBe('release');
+        expect(workspace.baseBranch).toBeUndefined();
         expect(workspace.backend).toMatchObject({
           kind: 'ssh',
-          baseBranch: 'release',
+          baseBranch: 'master',
           startPoint: 'origin/release',
         });
+        expect(mockGitService.resolvePublishedCommit).not.toHaveBeenCalled();
         expect(mockProjectService.update).not.toHaveBeenCalled();
         expect(mockProject.baseBranch).toBeUndefined();
       });

@@ -46,7 +46,6 @@ import {
   recoverMissingProjectBaseBranch,
   resolveLocalWorkspaceTarget,
   resolveSshTargetBranch,
-  sshWorkspaceTargetBranch,
   toSafeWorktreePath,
   withBranchPrefix,
 } from './worktree-branches';
@@ -271,15 +270,15 @@ export class WorkspaceProvisioning {
         : withBranchPrefix(branchSuffix, branchPrefix(project));
       this.updateProvisionStatus(workspaceId, 'Checking remote branch');
       const workspaceStartPoint = normalizeSshStartPoint(params.baseBranch);
-      const workspaceBaseBranch = sshWorkspaceTargetBranch(params);
-      const sshProjectBaseBranch = resolveSshTargetBranch(project, workspaceBaseBranch);
+      const sshProjectBaseBranch = resolveSshTargetBranch(project);
       const requestedStartPoint = workspaceStartPoint || sshProjectBaseBranch;
-      const startsFromProjectTarget =
-        !!sshProjectBaseBranch &&
+      // Without a project target, the host fetches whatever branch the workspace starts from.
+      const hostResolvesStartPoint =
+        !sshProjectBaseBranch ||
         normalizeSshTargetBranch(requestedStartPoint) === sshProjectBaseBranch;
       const startPoint = !requestedStartPoint
         ? undefined
-        : sshLocation.sourceBackend || startsFromProjectTarget || params.baseBranchOnHost
+        : sshLocation.sourceBackend || hostResolvesStartPoint || params.baseBranchOnHost
           ? requestedStartPoint
           : await gitService.resolvePublishedCommit(repoPath, requestedStartPoint || 'HEAD');
       if (this.consumeBranchNamingCheckpoint(workspaceId)) return;

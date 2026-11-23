@@ -23,20 +23,11 @@ const AUTO_BRANCH_RANDOM_RETRIES = 4;
 export const AUTO_BRANCH_MAX_ATTEMPTS = 25;
 
 /**
- * The base branch as the workspace's target, absent a project target. A branch only the
- * host has can't be one, since target checks compare with origin's copy.
+ * The project's target branch for an SSH workspace. Without one the host detects its default
+ * branch; the branch a workspace starts from is never its target.
  */
-export function sshWorkspaceTargetBranch(params: CreateWorkspaceParams): string | undefined {
-  return params.baseBranchOnHost ? undefined : normalizeSshTargetBranch(params.baseBranch);
-}
-
-export function resolveSshTargetBranch(
-  project: Project | undefined,
-  workspaceBaseBranch: string | undefined
-): string | undefined {
-  return (
-    normalizeSshTargetBranch(project?.baseBranch) || normalizeSshTargetBranch(workspaceBaseBranch)
-  );
+export function resolveSshTargetBranch(project: Project | undefined): string | undefined {
+  return normalizeSshTargetBranch(project?.baseBranch);
 }
 
 export function findBranchConflict(
@@ -74,10 +65,11 @@ export async function resolveLocalWorkspaceTarget(
 ): Promise<{ startPoint: string | undefined; baseBranch: string | undefined }> {
   const projectTarget = project.baseBranch?.trim() || undefined;
   const requestedStartPoint = params.baseBranch?.trim() || undefined;
-  const detectedTarget =
-    projectTarget || requestedStartPoint
-      ? undefined
-      : await gitService.getMainBranch(repoPath).catch(() => undefined);
+  // The branch a workspace starts from is never its target: one started from another
+  // workspace's branch still targets the project's.
+  const detectedTarget = projectTarget
+    ? undefined
+    : await gitService.getMainBranch(repoPath).catch(() => undefined);
 
   const localStartPoint = requestedStartPoint || projectTarget || detectedTarget;
   // New branches off the target start from origin's copy, so a stale local target doesn't
@@ -92,7 +84,7 @@ export async function resolveLocalWorkspaceTarget(
 
   return {
     startPoint: originStartPoint || localStartPoint,
-    baseBranch: projectTarget || requestedStartPoint || detectedTarget,
+    baseBranch: projectTarget || detectedTarget,
   };
 }
 

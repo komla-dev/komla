@@ -7472,6 +7472,64 @@ describe("sshWorkspaceService", () => {
   );
 
   itWithPosixShell(
+    "starts a workspace with no target from origin's copy of a branch the host has an older copy of",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "komla-ssh-untargeted-stale-"));
+      const originPath = join(root, "origin.git");
+      const seedPath = join(root, "seed");
+
+      try {
+        runGit(["init", "--bare", originPath]);
+        runGit(["clone", originPath, seedPath]);
+        writeFileSync(join(seedPath, "release.txt"), "initial\n");
+        runGit(["add", "release.txt"], seedPath);
+        runGit(["commit", "-m", "initial"], seedPath);
+        runGit(["branch", "-M", "main"], seedPath);
+        runGit(["push", "-u", "origin", "main"], seedPath);
+        runGit(["switch", "-c", "release"], seedPath);
+        runGit(["push", "-u", "origin", "release"], seedPath);
+        runGit(["--git-dir", originPath, "symbolic-ref", "HEAD", "refs/heads/main"]);
+
+        const { sshWorkspaceService } =
+          await import("../../../src/main/services/ssh-workspace.service");
+        const plan = sshWorkspaceService.createWorkspacePlan({
+          hostId: "ssh-dev",
+          gitUrl: originPath,
+          projectName: "untargeted-stale-project",
+          branchName: "agent/new-work",
+          startPoint: "release",
+          resolvedBasePath: join(root, ".komla"),
+        });
+        expect(plan.backend.baseBranch).toBeUndefined();
+
+        mkdirSync(join(plan.backend.remoteRepoPath, ".."), { recursive: true });
+        runGit(["clone", "--bare", originPath, plan.backend.remoteRepoPath]);
+
+        writeFileSync(join(seedPath, "release.txt"), "latest\n");
+        runGit(["add", "release.txt"], seedPath);
+        runGit(["commit", "-m", "latest"], seedPath);
+        runGit(["push", "origin", "release"], seedPath);
+
+        const setupCommand = await buildLazySetupCommand(plan.backend);
+        const stdout = execFileSync("/bin/sh", ["-c", setupCommand], {
+          encoding: "utf8",
+        });
+
+        expect(
+          readFileSync(
+            join(plan.backend.remoteDirectory, "release.txt"),
+            "utf8",
+          ),
+        ).toBe("latest\n");
+        // The branch it starts from isn't its target: the host reports origin's default.
+        expect(stdout).toContain("__KOMLA_SSH_WORKSPACE_TARGET__=main");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  itWithPosixShell(
     "does not move an existing branch that another worktree has checked out",
     async () => {
       const root = mkdtempSync(join(tmpdir(), "komla-ssh-existing-busy-"));

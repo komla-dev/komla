@@ -70,7 +70,6 @@ import {
   recoverMissingProjectBaseBranch,
   resolveLocalWorkspaceTarget,
   resolveSshTargetBranch,
-  sshWorkspaceTargetBranch,
   toSafeWorktreePath,
   withBranchPrefix,
 } from './worktree-branches';
@@ -105,7 +104,7 @@ async function sshBranchesToPublish(
   repoPath: string
 ): Promise<string[]> {
   const targetBranch =
-    resolveSshTargetBranch(project, normalizeSshTargetBranch(params.baseBranch)) ||
+    resolveSshTargetBranch(project) ||
     (await gitService.getTargetBranch(repoPath).catch(() => undefined));
   const existingBranch = params.checkoutExistingBranch
     ? normalizeSshTargetBranch(params.branchName)
@@ -318,16 +317,16 @@ export class WorkspaceCreation {
         return this.createDeferredSshWorkspace(params, project, gitUrl);
       }
       const workspaceStartPoint = normalizeSshStartPoint(params.baseBranch);
-      const workspaceBaseBranch = sshWorkspaceTargetBranch(params);
-      const sshProjectBaseBranch = resolveSshTargetBranch(project, workspaceBaseBranch);
+      const sshProjectBaseBranch = resolveSshTargetBranch(project);
       const requestedStartPoint = workspaceStartPoint || sshProjectBaseBranch;
-      const startsFromProjectTarget =
-        !!sshProjectBaseBranch &&
+      // Without a project target, the host fetches whatever branch the workspace starts from.
+      const hostResolvesStartPoint =
+        !sshProjectBaseBranch ||
         normalizeSshTargetBranch(requestedStartPoint) === sshProjectBaseBranch;
       // The host resolves its own branches, which origin doesn't have.
       const startPoint = !requestedStartPoint
         ? undefined
-        : startsFromProjectTarget || params.baseBranchOnHost
+        : hostResolvesStartPoint || params.baseBranchOnHost
           ? requestedStartPoint
           : project && repoPath && !params.location.sourceBackend
             ? await gitService.resolvePublishedCommit(repoPath, requestedStartPoint || 'HEAD')
@@ -706,8 +705,7 @@ export class WorkspaceCreation {
     const sshLocation = params.location?.kind === 'ssh' ? params.location : undefined;
     if (!sshLocation) throw new Error('SSH workspace location is required');
     const workspaceStartPoint = normalizeSshStartPoint(params.baseBranch);
-    const workspaceBaseBranch = sshWorkspaceTargetBranch(params);
-    const sshProjectBaseBranch = resolveSshTargetBranch(project, workspaceBaseBranch);
+    const sshProjectBaseBranch = resolveSshTargetBranch(project);
     const initialPlan = sshWorkspaceProvisioningService.plan({
       initialBranchName: placeholderBranch,
       params,

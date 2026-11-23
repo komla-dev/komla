@@ -2388,6 +2388,13 @@ class SshWorkspaceService {
       .replace(/^refs\/remotes\/origin\//, '')
       .replace(/^origin\//, '');
     const startsFromTarget = startsFromTargetBranch(backend);
+    // With no target, a branch named as the start point gets the same fast-forward-only
+    // preference for origin's copy that a target gets: the host's own copy is never fetched.
+    const prefersOriginCopy =
+      !startsFromTarget &&
+      !backend.baseBranch &&
+      startPoint !== 'HEAD' &&
+      !/^(?:origin\/|refs\/)/.test(startPoint);
     const needsRemoteDefaultStartPoint =
       !backend.checkoutExistingBranch && !backend.baseBranch && startPoint === 'HEAD';
     const repo = shellQuotePosix(backend.remoteRepoPath);
@@ -2653,7 +2660,13 @@ class SshWorkspaceService {
             '  exit 1',
             'fi',
           ]
-        : []),
+        : !backend.baseBranch
+          ? [
+              // A workspace started from a named branch still targets origin's default branch,
+              // recorded above as origin/HEAD, not the branch it starts from.
+              `resolved_target=$(git -C ${repo} symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')`,
+            ]
+          : []),
       `if [ ! -d ${shellQuotePosix(backend.remoteDirectory)} ]; then`,
       ...(backend.checkoutExistingBranch
         ? []
@@ -2661,11 +2674,11 @@ class SshWorkspaceService {
             needsRemoteDefaultStartPoint
               ? '  start_ref="$resolved_ref"'
               : `  start_ref=${shellQuotePosix(startPoint)}`,
-            ...(startsFromTarget
+            ...(startsFromTarget || prefersOriginCopy
               ? [
                   // The companion applies the same rule as the behind count and also
                   // fast-forwards a stale local target; the shell check covers hosts without it.
-                  ...(companionPath
+                  ...(companionPath && startsFromTarget
                     ? [
                         `  if synced_ref=$(${shellQuotePosix(companionPath)} git target sync -C ${shellQuotePosix(backend.remoteRepoPath)} --target ${shellQuotePosix(startPoint)} 2>/dev/null) && [ -n "$synced_ref" ]; then`,
                         '    start_ref="$synced_ref"',
