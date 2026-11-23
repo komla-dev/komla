@@ -1,3 +1,5 @@
+import { setImmediate as nextMacrotask } from 'node:timers/promises';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -7,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   hasRemote: vi.fn(),
   mainBranch: vi.fn(),
   fetch: vi.fn(),
+  originTips: vi.fn(),
   fastForwardTargets: vi.fn(),
   // Marks are taken before the origin check, which a workspace creation can then stop.
   backgroundMark: vi.fn((repoPath: string) => (repoPath === '/p/own' ? 2 : 1)),
@@ -41,6 +44,7 @@ vi.mock('../../../src/main/services/git.service', () => ({
     hasRemote: mocks.hasRemote,
     getMainBranch: mocks.mainBranch,
     fetchOriginWithoutPrompts: mocks.fetch,
+    originTips: mocks.originTips,
     backgroundMark: mocks.backgroundMark,
   },
 }));
@@ -108,9 +112,10 @@ describe('gitBackgroundFetchService', () => {
     mocks.hasRemote.mockReset().mockResolvedValue(true);
     mocks.mainBranch.mockReset().mockResolvedValue('trunk');
     mocks.fetch.mockReset().mockResolvedValue(undefined);
+    mocks.originTips.mockReset().mockResolvedValue(new Map());
     mocks.fastForwardTargets.mockReset().mockResolvedValue([]);
     mocks.hostStates = new Map();
-    mocks.sshFetch.mockReset().mockResolvedValue(false);
+    mocks.sshFetch.mockReset().mockResolvedValue({ moved: false });
     mocks.statusChange.mockReset().mockResolvedValue(undefined);
     mocks.companionHostIds = new Set();
     mocks.deletingIds = new Set();
@@ -207,7 +212,13 @@ describe('gitBackgroundFetchService', () => {
   it('fetches the branches of every project sharing the repository, leaving out bad names', async () => {
     mocks.projects = [
       { ...base, id: 'a', managed: false, repositoryPath: '/p/shared', baseBranch: 'develop' },
-      { ...base, id: 'b', managed: false, repositoryPath: '/p/shared', baseBranch: 'release candidate' },
+      {
+        ...base,
+        id: 'b',
+        managed: false,
+        repositoryPath: '/p/shared',
+        baseBranch: 'release candidate',
+      },
       // Follows the repository's main branch, and spells the path another way.
       { ...base, id: 'c', managed: false, repositoryPath: '/p/shared/' },
     ];
@@ -447,8 +458,8 @@ describe('gitBackgroundFetchService', () => {
       await gitBackgroundFetchService.fetchStale();
 
       expect(mocks.sshFetch.mock.calls).toEqual([
-        ['h1', '/r/app', 20_000, undefined],
-        ['h1', '/r/other', 20_000, undefined],
+        ['h1', '/r/app', 20_000, undefined, ['main', 'master']],
+        ['h1', '/r/other', 20_000, undefined, ['main', 'master']],
       ]);
       expect(mocks.statusChange).not.toHaveBeenCalled();
     });
@@ -466,14 +477,16 @@ describe('gitBackgroundFetchService', () => {
         markSshHostDisconnected('h1', false);
       }
 
-      expect(mocks.sshFetch.mock.calls).toEqual([['h2', '/r/app', 20_000, undefined]]);
+      expect(mocks.sshFetch.mock.calls).toEqual([
+        ['h2', '/r/app', 20_000, undefined, ['main', 'master']],
+      ]);
     });
 
     it("refreshes the workspaces the Remote Companion doesn't watch when origin moved", async () => {
       mocks.hostStates.set('h1', 'connected');
       mocks.companionHostIds.add('h1');
       mocks.sshFetch.mockImplementation(async (_hostId: string, repoPath: string) => {
-        return repoPath === '/r/app';
+        return { moved: repoPath === '/r/app' };
       });
       mocks.statusChange.mockRejectedValueOnce(new Error('Workspace s1 not found'));
       mocks.workspaces.splice(1, 0, ssh('s0', 'h1', '/r/app'), ssh('gone', 'h1', '/r/app'));
@@ -492,7 +505,7 @@ describe('gitBackgroundFetchService', () => {
     it('refreshes watched workspaces too while their host has no Remote Companion', async () => {
       mocks.hostStates.set('h1', 'connected');
       mocks.sshFetch.mockImplementation(async (_hostId: string, repoPath: string) => {
-        return repoPath === '/r/app';
+        return { moved: repoPath === '/r/app' };
       });
       const { gitBackgroundFetchService } =
         await import('../../../src/main/services/git-background-fetch.service');
@@ -538,14 +551,16 @@ describe('gitBackgroundFetchService', () => {
       finishLocal();
       await Promise.all([first, second]);
 
-      expect(mocks.sshFetch.mock.calls).toEqual([['h2', '/r/app', 20_000, undefined]]);
+      expect(mocks.sshFetch.mock.calls).toEqual([
+        ['h2', '/r/app', 20_000, undefined, ['main', 'master']],
+      ]);
       expect(mocks.fetch).toHaveBeenCalledTimes(1);
     });
 
-    it("fetches the clone a new workspace on the host would clone into", async () => {
+    it('fetches the clone a new workspace on the host would clone into', async () => {
       mocks.hostStates.set('h1', 'connected');
       mocks.basePaths.set('h1', '/home/h1/.komla');
-      mocks.sshFetch.mockResolvedValue(true);
+      mocks.sshFetch.mockResolvedValue({ moved: true });
       mocks.workspaces.push(ssh('s6', 'h1', '/home/h1/.komla/repos/app/repo.git'));
       const { gitBackgroundFetchService } =
         await import('../../../src/main/services/git-background-fetch.service');
@@ -554,7 +569,7 @@ describe('gitBackgroundFetchService', () => {
       await gitBackgroundFetchService.fetchProject('ssh-only', 'h1');
 
       expect(mocks.sshFetch.mock.calls).toEqual([
-        ['h1', '/home/h1/.komla/repos/app/repo.git', 20_000, undefined],
+        ['h1', '/home/h1/.komla/repos/app/repo.git', 20_000, undefined, ['main', 'master']],
       ]);
       expect(mocks.statusChange.mock.calls.map(([change]) => change.workspaceId)).toEqual(['s6']);
       // This computer's repository too, which gives a branch's commit on origin.
@@ -599,7 +614,7 @@ describe('gitBackgroundFetchService', () => {
       ]);
     });
 
-    it("leaves the host alone until Komla has reached it and knows where workspaces go", async () => {
+    it('leaves the host alone until Komla has reached it and knows where workspaces go', async () => {
       mocks.hostStates.set('h2', 'unreachable').set('h3', 'connected');
       mocks.basePaths.set('h2', '/home/h2/.komla');
       const { gitBackgroundFetchService } =
@@ -622,8 +637,245 @@ describe('gitBackgroundFetchService', () => {
 
       await gitBackgroundFetchService.fetchStaleOnSshHosts();
 
-      expect(mocks.sshFetch.mock.calls).toEqual([['h2', '/r/app', 20_000, undefined]]);
+      expect(mocks.sshFetch.mock.calls).toEqual([
+        ['h2', '/r/app', 20_000, undefined, ['main', 'master']],
+      ]);
       expect(mocks.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("keeping origin's copies alike here and on SSH hosts", () => {
+    const tips = (main: string) =>
+      new Map([
+        ['main', main],
+        ['master', null],
+      ]);
+    /** Lets every promise the service has started settle. */
+    const settled = () => nextMacrotask();
+
+    beforeEach(() => {
+      mocks.hostStates.set('h1', 'connected');
+      mocks.workspaces = [
+        { id: 'w2', projectId: 'own' },
+        {
+          id: 's1',
+          projectId: 'own',
+          backend: { kind: 'ssh', hostId: 'h1', remoteRepoPath: '/r/own' },
+        },
+        // Another project's clone, whose origin is elsewhere.
+        {
+          id: 's2',
+          projectId: 'ssh-only',
+          backend: { kind: 'ssh', hostId: 'h1', remoteRepoPath: '/r/app' },
+        },
+      ];
+    });
+
+    it("fetches on the host at once when origin's target moves here, as after a push", async () => {
+      mocks.sshFetch.mockResolvedValue({ moved: false, tips: tips('old') });
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+      expect(mocks.sshFetch.mock.calls.map((call) => [call[1], call[4]])).toEqual([
+        ['/r/own', ['main', 'master']],
+        ['/r/app', ['main', 'master']],
+      ]);
+      mocks.sshFetch.mockClear().mockResolvedValue({ moved: true, tips: tips('pushed') });
+      mocks.originTips.mockResolvedValue(tips('pushed'));
+
+      // Well inside the five minutes since the host last fetched.
+      gitBackgroundFetchService.originRefsMovedLocally(['w2']);
+
+      await vi.waitFor(() => expect(mocks.sshFetch).toHaveBeenCalledTimes(1));
+      // Without a target, the project follows the repository's main branch too.
+      expect(mocks.originTips).toHaveBeenCalledWith('/p/own', ['main', 'master', 'trunk']);
+      expect(mocks.sshFetch.mock.calls[0][1]).toBe('/r/own');
+      // The host now agrees, so this computer doesn't fetch in turn.
+      await vi.waitFor(() => expect(mocks.statusChange).toHaveBeenCalled());
+      await settled();
+      expect(mocks.fetch).not.toHaveBeenCalled();
+    });
+
+    it("fetches here at once when the host finds origin's target somewhere else", async () => {
+      // Origin's main is where the host found it once this computer fetches again.
+      mocks.originTips.mockImplementation(async () =>
+        tips(mocks.fetch.mock.calls.length > 1 ? 'landed' : 'old')
+      );
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchProject('own');
+      await vi.waitFor(() => expect(mocks.originTips).toHaveBeenCalled());
+      mocks.sshFetch.mockResolvedValue({ moved: true, tips: tips('landed') });
+
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+
+      await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(2));
+      await settled();
+      // Both copies agree now: the host isn't fetched again.
+      expect(mocks.sshFetch.mock.calls.map((call) => call[1])).toEqual(['/r/own', '/r/app']);
+    });
+
+    it('leaves the other side alone while the copies agree', async () => {
+      mocks.sshFetch.mockResolvedValue({ moved: false, tips: tips('same') });
+      mocks.originTips.mockResolvedValue(tips('same'));
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchStale();
+      await settled();
+      mocks.fetch.mockClear();
+      mocks.sshFetch.mockClear();
+
+      gitBackgroundFetchService.originRefsMovedLocally(['w2']);
+      await vi.waitFor(() => expect(mocks.originTips).toHaveBeenCalledTimes(2));
+      await settled();
+
+      expect(mocks.sshFetch).not.toHaveBeenCalled();
+      expect(mocks.fetch).not.toHaveBeenCalled();
+    });
+
+    it("skips a host fetch that the one it waited for made needless, so setup isn't held up", async () => {
+      mocks.sshFetch.mockResolvedValue({ moved: false, tips: tips('old') });
+      const { gitBackgroundFetchService, BACKGROUND_FETCH_INTERVAL_MS } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+      vi.advanceTimersByTime(BACKGROUND_FETCH_INTERVAL_MS);
+      mocks.sshFetch.mockClear();
+      let finishHostFetch!: () => void;
+      mocks.sshFetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishHostFetch = () => resolve({ moved: true, tips: tips('pushed') });
+          })
+      );
+      mocks.originTips.mockResolvedValue(tips('pushed'));
+
+      // The host is fetching when this computer sees the move.
+      const hostFetch = gitBackgroundFetchService.fetchStaleOnSshHosts();
+      await vi.waitFor(() => expect(mocks.sshFetch).toHaveBeenCalled());
+      gitBackgroundFetchService.originRefsMovedLocally(['w2']);
+      await vi.waitFor(() => expect(mocks.originTips).toHaveBeenCalled());
+      await settled();
+      finishHostFetch();
+      await hostFetch;
+      await settled();
+
+      expect(mocks.sshFetch.mock.calls.map((call) => call[1])).toEqual(['/r/own', '/r/app']);
+    });
+
+    it('goes by the latest read of a repository when reads overlap', async () => {
+      mocks.sshFetch.mockResolvedValue({ moved: false, tips: tips('new') });
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+      mocks.sshFetch.mockClear();
+      const reads: Array<(main: string) => void> = [];
+      mocks.originTips.mockImplementation(
+        () => new Promise((resolve) => reads.push((main) => resolve(tips(main))))
+      );
+
+      gitBackgroundFetchService.originRefsMovedLocally(['w2']);
+      gitBackgroundFetchService.originRefsMovedLocally(['w2']);
+      await vi.waitFor(() => expect(reads).toHaveLength(2));
+      reads[1]('new');
+      await settled();
+      // The first read, from before the move, finishes last.
+      reads[0]('old');
+      await settled();
+
+      expect(mocks.sshFetch).not.toHaveBeenCalled();
+    });
+
+    it('leaves the regular fetch due when a forced one finds the clone busy', async () => {
+      mocks.sshFetch.mockResolvedValue({ moved: false, tips: tips('old') });
+      const { gitBackgroundFetchService, BACKGROUND_FETCH_INTERVAL_MS } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+      vi.advanceTimersByTime(BACKGROUND_FETCH_INTERVAL_MS - 1_000);
+      // A workspace is being set up in the clone, so the forced fetch doesn't run.
+      mocks.sshFetch.mockClear().mockResolvedValueOnce({ moved: false });
+      mocks.originTips.mockResolvedValue(tips('pushed'));
+
+      gitBackgroundFetchService.originRefsMovedLocally(['w2']);
+      await vi.waitFor(() => expect(mocks.sshFetch).toHaveBeenCalledTimes(1));
+      await settled();
+      vi.advanceTimersByTime(2_000);
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+
+      expect(mocks.sshFetch.mock.calls.map((call) => call[1])).toEqual([
+        '/r/own',
+        '/r/own',
+        '/r/app',
+      ]);
+    });
+
+    it("asks the host about the branches this computer follows, such as the project's main", async () => {
+      mocks.originTips.mockResolvedValue(new Map([...tips('old'), ['trunk', 'old']]));
+      mocks.sshFetch.mockResolvedValue({ moved: false });
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchProject('own');
+      await vi.waitFor(() => expect(mocks.originTips).toHaveBeenCalled());
+      await settled();
+
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+
+      const ownFetch = mocks.sshFetch.mock.calls.find((call) => call[1] === '/r/own');
+      expect(ownFetch?.[4]).toEqual(['main', 'master', 'trunk']);
+    });
+
+    it('leaves a branch alone that one side has no copy of', async () => {
+      mocks.originTips.mockResolvedValue(
+        new Map([
+          ['main', 'same'],
+          ['master', 'stale'],
+        ])
+      );
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchProject('own');
+      await vi.waitFor(() => expect(mocks.originTips).toHaveBeenCalled());
+      await settled();
+      // The host pruned master, which this computer's clone keeps.
+      mocks.sshFetch.mockResolvedValue({ moved: true, tips: tips('same') });
+
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+      await settled();
+
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('fetches nothing here once background fetches are turned off mid-fetch', async () => {
+      mocks.originTips.mockResolvedValue(tips('old'));
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchProject('own');
+      await vi.waitFor(() => expect(mocks.originTips).toHaveBeenCalled());
+      await settled();
+      mocks.sshFetch.mockImplementation(async () => {
+        mocks.config = { gitBackgroundFetch: false };
+        return { moved: true, tips: tips('landed') };
+      });
+
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+      await settled();
+
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('fetches nothing when background fetches are turned off', async () => {
+      mocks.sshFetch.mockResolvedValue({ moved: false, tips: tips('old') });
+      const { gitBackgroundFetchService } =
+        await import('../../../src/main/services/git-background-fetch.service');
+      await gitBackgroundFetchService.fetchStaleOnSshHosts();
+      mocks.sshFetch.mockClear();
+      mocks.originTips.mockResolvedValue(tips('pushed'));
+      mocks.config = { gitBackgroundFetch: false };
+
+      gitBackgroundFetchService.originRefsMovedLocally(['w2']);
+      await settled();
+
+      expect(mocks.originTips).not.toHaveBeenCalled();
+      expect(mocks.sshFetch).not.toHaveBeenCalled();
     });
   });
 });

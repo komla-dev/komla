@@ -143,9 +143,9 @@ describe('sshWorkspaceGit.fetchOriginWithoutPrompts', () => {
   });
 
   it('fetches without prompts, and tells whether origin moved', async () => {
-    await expect(sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)).resolves.toBe(
-      false
-    );
+    await expect(
+      sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)
+    ).resolves.toEqual({ moved: false });
     expect(run).toHaveBeenCalledWith({ id: 'host-1' }, expect.any(String), {
       timeout: 30_000,
       purpose: { kind: 'background' },
@@ -154,16 +154,35 @@ describe('sshWorkspaceGit.fetchOriginWithoutPrompts', () => {
 
     await git(elsewhere, 'commit', '--quiet', '--allow-empty', '-m', 'pushed elsewhere');
     await git(elsewhere, 'push', '--quiet', 'origin', 'HEAD:main');
-    await expect(sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)).resolves.toBe(
-      true
-    );
+    await expect(
+      sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)
+    ).resolves.toEqual({ moved: true });
 
     await git(elsewhere, 'push', '--quiet', 'origin', 'HEAD:feature');
     await git(clone, 'fetch', '--quiet', 'origin');
     await git(elsewhere, 'push', '--quiet', 'origin', '--delete', 'feature');
     // A pruned branch is a move too.
-    await expect(sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)).resolves.toBe(
-      true
+    await expect(
+      sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)
+    ).resolves.toEqual({ moved: true });
+  });
+
+  it("tells where origin's copies of the branches asked about are", async () => {
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: elsewhere });
+
+    const fetched = await sshWorkspaceGit.fetchOriginWithoutPrompts(
+      'host-1',
+      clone,
+      20_000,
+      undefined,
+      ['main', 'missing']
+    );
+
+    expect(fetched.tips).toEqual(
+      new Map([
+        ['main', stdout.trim()],
+        ['missing', null],
+      ])
     );
   });
 
@@ -191,9 +210,13 @@ describe('sshWorkspaceGit.fetchOriginWithoutPrompts', () => {
   it('fetches and prunes just the branches asked for, and records them', async () => {
     const remoteBranches = async () =>
       (
-        await execFileAsync('git', ['for-each-ref', '--format=%(refname:strip=3)', 'refs/remotes'], {
-          cwd: clone,
-        })
+        await execFileAsync(
+          'git',
+          ['for-each-ref', '--format=%(refname:strip=3)', 'refs/remotes'],
+          {
+            cwd: clone,
+          }
+        )
       ).stdout
         .trim()
         .split('\n');
@@ -205,7 +228,7 @@ describe('sshWorkspaceGit.fetchOriginWithoutPrompts', () => {
 
     await expect(
       sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000, ['main', 'feature'])
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ moved: true });
 
     // origin/other is left as it was: only a fetch of every branch prunes it.
     expect(await remoteBranches()).toEqual(['HEAD', 'main', 'other']);
@@ -221,9 +244,10 @@ describe('sshWorkspaceGit.fetchOriginWithoutPrompts', () => {
       await git(elsewhere, 'commit', '--quiet', '--allow-empty', '-m', 'pushed elsewhere');
       await git(elsewhere, 'push', '--quiet', 'origin', 'HEAD:main');
 
+      // It says nothing of origin's copies, which it didn't fetch.
       await expect(
-        sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)
-      ).resolves.toBe(false);
+        sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000, undefined, ['main'])
+      ).resolves.toEqual({ moved: false });
       expect(existsSync(lock), "another setup's lock removed").toBe(true);
     } finally {
       await setup.stop();
@@ -232,27 +256,27 @@ describe('sshWorkspaceGit.fetchOriginWithoutPrompts', () => {
     // Left by a setup that was killed.
     const { stdout: deadPid } = await execFileAsync('sh', ['-c', 'echo $$']);
     writeFileSync(join(lock, 'pid'), deadPid);
-    await expect(sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)).resolves.toBe(
-      true
-    );
+    await expect(
+      sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)
+    ).resolves.toEqual({ moved: true });
     expect(existsSync(lock), 'lock left behind').toBe(false);
 
     // Without an owner yet, as a setup that has just taken it leaves it.
     mkdirSync(lock);
     await git(elsewhere, 'commit', '--quiet', '--allow-empty', '-m', 'pushed again');
     await git(elsewhere, 'push', '--quiet', 'origin', 'HEAD:main');
-    await expect(sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)).resolves.toBe(
-      false
-    );
+    await expect(
+      sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)
+    ).resolves.toEqual({ moved: false });
     expect(existsSync(lock), "another setup's lock removed").toBe(true);
   });
 
   it('skips a clone without origin', async () => {
     await git(clone, 'remote', 'remove', 'origin');
 
-    await expect(sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)).resolves.toBe(
-      false
-    );
+    await expect(
+      sshWorkspaceGit.fetchOriginWithoutPrompts('host-1', clone, 20_000)
+    ).resolves.toEqual({ moved: false });
   });
 
   // Checks the fake ssh script's process id, which a Windows shell's $$ is not.

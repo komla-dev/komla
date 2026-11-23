@@ -2269,7 +2269,7 @@ describe('Komla Remote Companion through Docker OpenSSH', () => {
 
     // Catches up on what earlier tests pushed.
     await fetch();
-    await expect(fetch()).resolves.toBe(false);
+    await expect(fetch()).resolves.toEqual({ moved: false });
     await container.exec([
       'sh',
       '-lc',
@@ -2284,7 +2284,7 @@ describe('Komla Remote Companion through Docker OpenSSH', () => {
       'sh',
       `${target.remoteHome}/.komla-ssh-integration-fixture/origin.git`,
     ]);
-    await expect(fetch()).resolves.toBe(true);
+    await expect(fetch()).resolves.toEqual({ moved: true });
 
     // A remote that never answers: git's ssh records its pid and hangs.
     const fakeSsh = `${target.resolvedBasePath}/background-fetch-ssh`;

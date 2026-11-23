@@ -22,6 +22,7 @@ import {
   parseIncomingLog,
   toCommitGraph,
 } from '../git/git-history';
+import { originTipsArgs, parseOriginTips, type OriginTips } from '../git/origin-tips';
 import { remoteCompanionService } from '../remote-companion.service';
 import { sshWorkspaceService } from '../ssh-workspace.service';
 
@@ -243,6 +244,15 @@ function gitBatchScript(repoPath: string, marker: string, commands: GitBatchComm
 }
 
 const ORIGIN_REFS_CHANGED_MARKER = '__KOMLA_ORIGIN_REFS_CHANGED__';
+const ORIGIN_TIPS_MARKER = '__KOMLA_ORIGIN_TIPS__';
+
+/** What a background fetch on a host found. */
+export interface SshOriginFetch {
+  /** Whether any of origin's remote-tracking refs moved. */
+  moved: boolean;
+  /** Origin's tips of the branches asked about, or undefined when the fetch didn't run. */
+  tips?: OriginTips;
+}
 // Stands in for the upstream among the incoming commits' starts, filled in on the host, where git
 // would read it the same way if it ever got through.
 const UPSTREAM = '@{upstream}';
@@ -250,7 +260,7 @@ const UPSTREAM = '@{upstream}';
 /**
  * A script that fetches origin's `branches`, or every branch, in `repoPath` without asking for
  * anything, like the local background fetch, and prints ORIGIN_REFS_CHANGED_MARKER when a
- * remote-tracking ref moved.
+ * remote-tracking ref moved. After ORIGIN_TIPS_MARKER it lists origin's copies of `tipsOf`.
  * It stops git itself after `timeoutSeconds`, so a slow remote doesn't look like a slow host.
  * It holds the clone's setup lock, so a workspace being created waits for it and then starts
  * from what it fetched, and it leaves a clone that is being set up alone.
@@ -258,7 +268,8 @@ const UPSTREAM = '@{upstream}';
 function backgroundFetchScript(
   repoPath: string,
   timeoutSeconds: number,
-  branches: readonly string[] | undefined
+  branches: readonly string[] | undefined,
+  tipsOf: readonly string[]
 ): string {
   const refspecs = (branches ? originBranchRefspecs(branches) : [])
     .map((refspec) => ` ${shellQuotePosix(refspec)}`)
@@ -326,6 +337,12 @@ function backgroundFetchScript(
     '[ "$status" -eq 0 ] || exit "$status"',
     ...recordOriginFetchLines(repoPath, branches),
     `[ "$(refs)" = "$before" ] || printf '%s\\n' ${ORIGIN_REFS_CHANGED_MARKER}`,
+    ...(tipsOf.length > 0
+      ? [
+          `printf '%s\\n' ${ORIGIN_TIPS_MARKER}`,
+          ['git', ...originTipsArgs(tipsOf)].map(shellQuotePosix).join(' '),
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -704,22 +721,29 @@ class SshWorkspaceGit {
 
   /**
    * Fetches origin for a repository on the host, never asking for a login, password or
-   * passphrase. Resolves whether any of origin's remote-tracking refs moved.
+   * passphrase. Resolves whether any of origin's remote-tracking refs moved, and where origin's
+   * copies of `tipsOf` are after it.
    */
   async fetchOriginWithoutPrompts(
     hostId: string,
     repoPath: string,
     timeoutMs: number,
-    branches?: readonly string[]
-  ): Promise<boolean> {
+    branches?: readonly string[],
+    tipsOf: readonly string[] = []
+  ): Promise<SshOriginFetch> {
     const host = sshWorkspaceService.getHost(hostId);
     const output = await sshWorkspaceService.run(
       host,
-      backgroundFetchScript(repoPath, Math.ceil(timeoutMs / 1000), branches),
+      backgroundFetchScript(repoPath, Math.ceil(timeoutMs / 1000), branches, tipsOf),
       // Room past git's own timeout, so a host that answers isn't taken for one that doesn't.
       { timeout: timeoutMs + 10_000, purpose: { kind: 'background' }, prompt: false }
     );
-    return output.split('\n').some((line) => line.trim() === ORIGIN_REFS_CHANGED_MARKER);
+    const lines = output.split('\n').map((line) => line.trim());
+    const tipsAt = lines.indexOf(ORIGIN_TIPS_MARKER);
+    return {
+      moved: lines.includes(ORIGIN_REFS_CHANGED_MARKER),
+      ...(tipsAt >= 0 && { tips: parseOriginTips(lines.slice(tipsAt + 1).join('\n'), tipsOf) }),
+    };
   }
 
   async mergeFrom(

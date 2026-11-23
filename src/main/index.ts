@@ -706,6 +706,9 @@ void app.whenReady().then(async () => {
   worktreeWatcherService.onActivity = (workspaceId, activityAt) => {
     workspaceService.touchLastActivity(workspaceId, activityAt);
   };
+  // A push or fetch here moves origin's refs; an SSH host whose copy differs then fetches too.
+  worktreeWatcherService.onOriginRefsMoved = (workspaceIds) =>
+    gitBackgroundFetchService.originRefsMovedLocally(workspaceIds);
 
   const remoteDeviceConnected = () => !!remoteControlDirectService.getState().connectedDevice;
   // Refresh git status less often while nobody can see it: every window hidden or

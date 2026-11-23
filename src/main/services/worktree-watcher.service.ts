@@ -81,6 +81,15 @@ function classifyGitChange(
   return null;
 }
 
+/** Whether a git-dir change may have moved one of origin's remote-tracking refs. */
+function movesOriginRef(gitDir: string, eventPath: string): boolean {
+  const parts = relative(gitDir, eventPath).split(/[/\\]/);
+  return (
+    (parts[0] === 'refs' && parts[1] === 'remotes' && parts[2] === 'origin') ||
+    (parts.length === 1 && parts[0] === 'packed-refs')
+  );
+}
+
 /**
  * A branch name as the filesystem tells it apart: in one Unicode form, since macOS may report a
  * path decomposed, and case-insensitively on macOS and Windows.
@@ -154,6 +163,8 @@ class WorktreeWatcherService {
   /** Called when file activity is detected for a workspace (sessionId = workspaceId) */
   onActivity: ((workspaceId: string, activityAt: number) => void) | null = null;
   onObservation: ((snapshot: LocalWorkspaceStatusSnapshot) => Promise<unknown>) | null = null;
+  /** Called when origin's remote-tracking refs may have moved in the workspaces' repository. */
+  onOriginRefsMoved: ((workspaceIds: string[]) => void) | null = null;
 
   /**
    * Start watching a directory for file changes.
@@ -518,6 +529,9 @@ class WorktreeWatcherService {
         const throttled = isShared && targets.length > 1;
         const movedBranches = new Set<string>();
         let refreshedAll = false;
+        if (targets.length > 0 && events.some((event) => movesOriginRef(dir, event.path))) {
+          this.onOriginRefsMoved?.(targets);
+        }
         for (const event of events) {
           const classified = classifyGitChange(dir, event.path);
           if (!classified) continue;

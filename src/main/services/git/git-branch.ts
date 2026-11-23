@@ -13,6 +13,7 @@ import {
   NO_PROMPT_CONFIG_KEYS,
 } from './git-exec';
 import { gitWorktreeService } from './git-worktree';
+import { originTipsArgs, parseOriginTips, type OriginTips } from './origin-tips';
 
 import type {
   GitSavedChangesRecovery,
@@ -1780,6 +1781,13 @@ class GitBranchService {
     if (tracksEveryBranch) this.recordOriginFetch(repoPath, named ?? [EVERY_BRANCH]);
     gitExec.invalidateCache(`mainBranch:${repoPath}`);
     gitExec.invalidateCache(`remoteDefaultBranch:${repoPath}`);
+  }
+
+  /** Where origin's copies of `branches` are in a repository, by its remote-tracking refs. */
+  async originTips(repoPath: string, branches: readonly string[]): Promise<OriginTips> {
+    if (branches.length === 0) return new Map();
+    const output = await gitExec.execGitAsync(repoPath, originTipsArgs(branches));
+    return parseOriginTips(output, branches);
   }
 
   private recordOriginFetch(repoPath: string, branches: readonly string[]): void {

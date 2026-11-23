@@ -938,9 +938,9 @@ describe('WorktreeWatcherService', () => {
       });
 
       // A commit in one worktree moves its own branch, through a lock file.
-      expect(
-        await refreshedBy(['refs/heads/feature/one.lock', 'refs/heads/feature/one'])
-      ).toEqual(['ws-one']);
+      expect(await refreshedBy(['refs/heads/feature/one.lock', 'refs/heads/feature/one'])).toEqual([
+        'ws-one',
+      ]);
       expect(await refreshedBy(['refs/heads/other'])).toEqual([]);
       // The target branch every worktree counts ahead and behind against.
       expect(await refreshedBy(['refs/heads/main'])).toEqual(['ws-one', 'ws-two']);
@@ -955,6 +955,26 @@ describe('WorktreeWatcherService', () => {
       // A remote branch may be any worktree's upstream, whatever its name.
       expect(await refreshedBy(['refs/remotes/origin/feature/one'])).toEqual(['ws-one', 'ws-two']);
       expect(await refreshedBy(['packed-refs'])).toEqual(['ws-one', 'ws-two']);
+    });
+
+    it("says when origin's refs may have moved, so SSH hosts can catch up", async () => {
+      const refreshedBy = await startWorktrees({
+        one: 'ref: refs/heads/feature/one\n',
+        two: 'ref: refs/heads/feature/two\n',
+      });
+      const moved = vi.fn();
+      refreshedBy.worktreeWatcherService.onOriginRefsMoved = moved;
+
+      await refreshedBy([
+        'refs/heads/main',
+        'refs/remotes/upstream/main',
+        'logs/refs/remotes/origin/main',
+      ]);
+      expect(moved).not.toHaveBeenCalled();
+
+      await refreshedBy(['refs/remotes/origin/main.lock', 'refs/remotes/origin/main']);
+      await refreshedBy(['packed-refs']);
+      expect(moved.mock.calls).toEqual([[['ws-one', 'ws-two']], [['ws-one', 'ws-two']]]);
     });
 
     it("reads each worktree's branches as they are now", async () => {

@@ -20,6 +20,7 @@ import type { GitProgressCallback, ManagedWorktree } from './git-exec';
 import type { CommitDiff } from './git-history';
 import type { RepoWebInfo } from './git-repo';
 import type { CreatedWorktree, WorktreeInfo } from './git-worktree';
+import type { OriginTips } from './origin-tips';
 import type {
   CommitChangesResult,
   CommitDraftResult,
@@ -324,6 +325,9 @@ class GitService {
     branches?: readonly string[]
   ): Promise<void> {
     return gitBranchService.fetchOriginWithoutPrompts(repoPath, managed, timeoutMs, mark, branches);
+  }
+  originTips(repoPath: string, branches: readonly string[]): Promise<OriginTips> {
+    return gitBranchService.originTips(repoPath, branches);
   }
   stopBackgroundWork(repoPath: string): void {
     gitExec.stopBackgroundWork(repoPath);
