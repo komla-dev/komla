@@ -2485,6 +2485,12 @@ class SshWorkspaceService {
       '      if [ "$authority" = "$remainder" ]; then path=; else path=${remainder#*/}; fi',
       '      host=${authority##*@}',
       '      if [ "$authority" != "$host" ]; then user=${authority%@*}; else user=; fi',
+      // Credentials don't name the repository: a rotated token or password is the same origin.
+      // These are the ones without_git_url_credentials leaves out of a collision error.
+      '      user=${user%%:*}',
+      '      case "$(printf "%s" "$transport" | tr "[:upper:]" "[:lower:]")" in',
+      '        http|https) user= ;;',
+      '      esac',
       '      ;;',
       '    *:*)',
       '      transport=ssh',

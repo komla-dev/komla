@@ -6665,6 +6665,55 @@ describe("sshWorkspaceService", () => {
     }
   });
 
+  itWithPosixShell.each([
+    {
+      name: "a rotated token in a self-hosted forge's origin",
+      existing: "https://old-secret@ghe.example.invalid/team/repo.git",
+      requested: "https://new-secret@ghe.example.invalid/team/repo.git",
+    },
+    {
+      name: "a changed password in an SSH origin",
+      existing: "ssh://ci:old-secret@git.example.invalid/team/repo.git",
+      requested: "ssh://ci:new-secret@git.example.invalid/team/repo.git",
+    },
+  ])("doesn't take $name for another repository", async ({ existing, requested }) => {
+    const root = mkdtempSync(join(tmpdir(), "komla-ssh-rotated-credentials-"));
+
+    try {
+      const { sshWorkspaceService } =
+        await import("../../../src/main/services/ssh-workspace.service");
+      const plan = sshWorkspaceService.createWorkspacePlan({
+        hostId: "ssh-dev",
+        gitUrl: requested,
+        projectId: "new-project-id",
+        projectName: "rotated-credentials",
+        branchName: "agent/new-work",
+        baseBranch: "main",
+        resolvedBasePath: join(root, ".komla"),
+      });
+      mkdirSync(join(plan.backend.remoteRepoPath, ".."), { recursive: true });
+      runGit(["init", "--bare", plan.backend.remoteRepoPath]);
+      runGit(
+        ["config", "remote.origin.url", existing],
+        plan.backend.remoteRepoPath,
+      );
+      mkdirSync(plan.backend.remoteDirectory, { recursive: true });
+
+      const setupCommand = await buildLazySetupCommand(plan.backend);
+      const result = spawnSync("/bin/sh", ["-c", setupCommand], {
+        encoding: "utf8",
+        // Neither origin resolves (.invalid); this also stops git asking for credentials.
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "false" },
+      });
+
+      // The same repository goes on to check the new URL instead of refusing the copy.
+      expect(result.stderr).not.toContain("clones");
+      expect(result.stderr).toContain("could not access the requested Git transport");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   itWithPosixShell(
     "refuses a Git URL that git would read as an option",
     async () => {
