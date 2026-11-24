@@ -632,9 +632,15 @@ void app.whenReady().then(async () => {
     void sshConnectionService.checkHeldConnections();
     void automationService.tick();
     sshPortForwardService.retryKomlaDataTunnelsNow();
+    // Tailscale may have dropped Komla's route while asleep.
+    void startPersistedDirectRemoteServer('resume');
   });
   // An SSH agent that locks with the screen fails every login until the user is back.
-  powerMonitor.on('unlock-screen', () => sshPortForwardService.retryKomlaDataTunnelsNow());
+  powerMonitor.on('unlock-screen', () => {
+    sshPortForwardService.retryKomlaDataTunnelsNow();
+    // A locked keychain keeps remote control from reading its identity at launch.
+    void startPersistedDirectRemoteServer('resume');
+  });
   keepAwakeService.setMode(configService.get().keepAwakeMode);
   keepAwakeWhileAgentsWork(() => workspaceService.list());
   promptDraftWindowService.init();

@@ -574,6 +574,21 @@ describe('RemoteControlDirectService', () => {
     expect(service.getState()).toEqual({ server: null, pairingOffer: null, portChange: null });
   });
 
+  it('reports why remote control is not reachable until the problem is cleared', () => {
+    const { service: localService, emitStateChange } = makeService(webAssetDir);
+
+    localService.setStartProblem('Tailscale is not running.');
+    expect(localService.getState().startProblem).toBe('Tailscale is not running.');
+    expect(emitStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ startProblem: 'Tailscale is not running.' })
+    );
+    localService.setStartProblem('Tailscale is not running.');
+    expect(emitStateChange).toHaveBeenCalledOnce();
+
+    localService.setStartProblem(null);
+    expect(localService.getState()).toEqual({ server: null, pairingOffer: null, portChange: null });
+  });
+
   it('expires direct pairing offers without stopping the server', async () => {
     vi.useFakeTimers();
     const { service: localService, emitStateChange } = makeService(webAssetDir, {

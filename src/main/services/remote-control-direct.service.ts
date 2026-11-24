@@ -321,6 +321,7 @@ export class RemoteControlDirectService {
   private readonly pendingSessions = new Set<DirectPeerSession>();
   private activeSession: DirectPeerSession | null = null;
   private portChange: RemoteControlDirectPortChange | null = null;
+  private startProblem: string | null = null;
   private terminalPresentationTrackingActive = false;
   private lifecycleQueue: Promise<void> = Promise.resolve();
 
@@ -399,7 +400,15 @@ export class RemoteControlDirectService {
       pairingOffer: this.pairingOffer,
       portChange: this.portChange,
       ...(connectedDevice ? { connectedDevice } : {}),
+      ...(this.startProblem ? { startProblem: this.startProblem } : {}),
     };
+  }
+
+  /** Shown in Settings while the server or its Tailscale route won't come up on its own. */
+  setStartProblem(problem: string | null): void {
+    if (problem === this.startProblem) return;
+    this.startProblem = problem;
+    this.emitStateChange();
   }
 
   async start(

@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -308,6 +308,64 @@ describe('RemoteTab direct remote controls', () => {
     expect(screen.getByText(/Turn remote control off to pick another/)).toBeInTheDocument();
     // Publishing checks the port again, so freeing it elsewhere needs no refresh here.
     expect(screen.getByRole('button', { name: 'Publish with Tailscale Serve' })).toBeEnabled();
+  });
+
+  it('shows remote control as on, and lets it be turned off, while it keeps failing to start', async () => {
+    const api = installApi({
+      server: null,
+      pairingOffer: null,
+      portChange: null,
+      startProblem: "Remote control didn't start: keychain locked. Komla keeps trying.",
+    });
+    const user = userEvent.setup();
+    render(<RemoteTab />);
+
+    expect(await screen.findByText(/keychain locked\. Komla keeps trying/)).toBeInTheDocument();
+    const toggle = screen.getByRole('switch', { name: /remote control/i });
+    expect(toggle).toBeChecked();
+    expect(screen.queryByText('Remote control is off')).not.toBeInTheDocument();
+    await user.click(toggle);
+
+    await waitFor(() => expect(api.remoteControlDirectStop).toHaveBeenCalledOnce());
+  });
+
+  it('checks Tailscale again when the start problem changes', async () => {
+    const api = installApi({
+      server: directServer,
+      pairingOffer: null,
+      portChange: null,
+      startProblem: "Remote control is on, but Tailscale Serve couldn't publish it.",
+    });
+    render(<RemoteTab />);
+    await waitFor(() => expect(api.remoteControlDirectGetTailscaleStatus).toHaveBeenCalledOnce());
+
+    act(() =>
+      api.emitDirectStateChanged({ server: directServer, pairingOffer: null, portChange: null })
+    );
+
+    await waitFor(() => expect(api.remoteControlDirectGetTailscaleStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it('says once that another route has the HTTPS port', async () => {
+    const api = installApi({
+      server: directServer,
+      pairingOffer: null,
+      portChange: null,
+      startProblem: 'Another Tailscale Serve route uses HTTPS port 443.',
+    });
+    api.remoteControlDirectGetTailscaleStatus.mockResolvedValue({
+      installed: true,
+      command: 'tailscale serve --bg --https=443 localhost:52864',
+      suggestedOrigin: 'https://mac.tailnet.ts.net',
+      httpsPortTaken: true,
+    });
+
+    render(<RemoteTab />);
+
+    expect(
+      await screen.findByText(/Another Tailscale Serve route uses this HTTPS port/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/uses HTTPS port 443/)).not.toBeInTheDocument();
   });
 
   it('warns about a taken port while the address can still be changed', async () => {

@@ -88,7 +88,9 @@ describe('remoteControlTailscaleService', () => {
     const { remoteControlTailscaleService } =
       await import('../../../src/main/services/remote-control-tailscale.service');
 
-    await remoteControlTailscaleService.reconcile('https://mac.tailnet.ts.net:52864', 57948);
+    await remoteControlTailscaleService.reconcile('https://mac.tailnet.ts.net:52864', 57948, {
+      previousLocalPort: 54809,
+    });
 
     expect(mockExecFile).toHaveBeenNthCalledWith(
       2,
@@ -121,6 +123,34 @@ describe('remoteControlTailscaleService', () => {
     await expect(
       remoteControlTailscaleService.reconcile('https://mac.tailnet.ts.net', 57948)
     ).rejects.toBeInstanceOf(TailscaleFunnelEnabledError);
+
+    expect(mockExecFile).toHaveBeenCalledOnce();
+  });
+
+  it("leaves alone another program's route on the HTTPS port", async () => {
+    serveStatus({
+      Web: { 'mac.tailnet.ts.net:443': { Handlers: { '/': { Proxy: 'localhost:3000' } } } },
+    });
+    const { remoteControlTailscaleService, TailscaleHttpsPortTakenError } =
+      await import('../../../src/main/services/remote-control-tailscale.service');
+
+    await expect(
+      remoteControlTailscaleService.reconcile('https://mac.tailnet.ts.net', 57948, {
+        previousLocalPort: 52864,
+      })
+    ).rejects.toBeInstanceOf(TailscaleHttpsPortTakenError);
+
+    expect(mockExecFile).toHaveBeenCalledOnce();
+  });
+
+  it('does not publish the route once the caller no longer wants it', async () => {
+    serveStatus({});
+    const { remoteControlTailscaleService } =
+      await import('../../../src/main/services/remote-control-tailscale.service');
+
+    await remoteControlTailscaleService.reconcile('https://mac.tailnet.ts.net', 57948, {
+      shouldApply: () => false,
+    });
 
     expect(mockExecFile).toHaveBeenCalledOnce();
   });

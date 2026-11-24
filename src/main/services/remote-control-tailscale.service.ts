@@ -68,7 +68,15 @@ class RemoteControlTailscaleService {
     assertNoFunnel(await readServeStatus(), getHttpsPort(publicOrigin));
   }
 
-  async reconcile(publicOrigin: string, localPort: number): Promise<void> {
+  /**
+   * Puts Komla's route back when it's missing. It may replace only a route to `previousLocalPort`,
+   * where Komla's server last listened: another route on the HTTPS port belongs to someone else.
+   */
+  async reconcile(
+    publicOrigin: string,
+    localPort: number,
+    options: { previousLocalPort?: number; shouldApply?: () => boolean } = {}
+  ): Promise<void> {
     const httpsPort = getHttpsPort(publicOrigin);
     const target = `localhost:${localPort}`;
     const status = await readServeStatus();
@@ -77,6 +85,15 @@ class RemoteControlTailscaleService {
       logger.debug('kept existing Tailscale Serve listener', { httpsPort, target });
       return;
     }
+    const previousTarget =
+      options.previousLocalPort === undefined ? null : `localhost:${options.previousLocalPort}`;
+    if (
+      isHttpsPortTaken(status, httpsPort, target) &&
+      (!previousTarget || isHttpsPortTaken(status, httpsPort, previousTarget))
+    ) {
+      throw new TailscaleHttpsPortTakenError(httpsPort);
+    }
+    if (options.shouldApply && !options.shouldApply()) return;
 
     await applyServe(publicOrigin, localPort);
     logger.info('reconciled Tailscale Serve listener', { httpsPort, target });
@@ -138,6 +155,17 @@ export function hasFunnel(value: unknown, httpsPort: string): boolean {
     typeof Foreground === 'object' &&
     Object.values(Foreground).some((config) => hasFunnel(config, httpsPort))
   );
+}
+
+/** What Tailscale said went wrong, rather than the command line that failed. */
+export function formatTailscaleError(err: unknown): string {
+  const nodeErr = err as NodeJS.ErrnoException & { stderr?: string };
+  if (nodeErr.code === 'ENOENT') {
+    return 'Could not find the tailscale command. Install Tailscale, then try again.';
+  }
+  const stderr = typeof nodeErr.stderr === 'string' ? nodeErr.stderr.trim() : '';
+  if (stderr) return stderr;
+  return nodeErr.message || 'Failed to start Tailscale Serve';
 }
 
 export function getHttpsPort(publicOrigin: string): string {

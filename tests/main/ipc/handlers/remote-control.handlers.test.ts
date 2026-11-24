@@ -127,6 +127,7 @@ const mockRemoteControlDirectService = {
   })),
   disconnectActiveClient: vi.fn(),
   disconnectCredential: vi.fn(),
+  setStartProblem: vi.fn(),
 };
 
 vi.mock('../../../../src/main/services/remote-control-direct.service', () => ({
@@ -359,18 +360,29 @@ describe('registerRemoteControlHandlers', () => {
       directRemotePort: 52864,
       directRemotePublicOrigin: 'https://mac.tailnet.ts.net',
     });
-    mockRemoteControlDirectService.getInfo.mockReturnValueOnce(null);
+    const defaultGetInfo = mockRemoteControlDirectService.getInfo.getMockImplementation()!;
+    const running = defaultGetInfo();
+    let started = false;
+    mockRemoteControlDirectService.getInfo.mockImplementation(() => (started ? running : null));
+    mockRemoteControlDirectService.start.mockImplementationOnce(async () => {
+      started = true;
+      return running;
+    });
     const { registerRemoteControlHandlers, ipcMain } = await setup();
     registerRemoteControlHandlers();
 
-    await expect(ipcMain._invoke('remote-control:direct-get-state')).resolves.toMatchObject({
-      server: { port: 52864 },
-    });
+    try {
+      await expect(ipcMain._invoke('remote-control:direct-get-state')).resolves.toMatchObject({
+        server: { port: 52864 },
+      });
 
-    expect(mockRemoteControlDirectService.start).toHaveBeenCalledWith({
-      port: 52864,
-      publicOrigin: 'https://mac.tailnet.ts.net',
-    });
+      expect(mockRemoteControlDirectService.start).toHaveBeenCalledWith({
+        port: 52864,
+        publicOrigin: 'https://mac.tailnet.ts.net',
+      });
+    } finally {
+      mockRemoteControlDirectService.getInfo.mockImplementation(defaultGetInfo);
+    }
   });
 
   it('starts Tailscale Serve at the root HTTPS origin by default', async () => {

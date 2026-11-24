@@ -87,4 +87,6 @@ export interface RemoteControlDirectState {
   pairingOffer: RemoteControlDirectPairingOffer | null;
   portChange: RemoteControlDirectPortChange | null;
   connectedDevice?: RemoteControlConnectedDevice | null;
+  /** Why remote control, on in Settings, isn't reachable yet. Komla keeps retrying meanwhile. */
+  startProblem?: string;
 }

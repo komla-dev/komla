@@ -102,7 +102,9 @@ export function RemoteTab() {
 
   useEffect(() => {
     let cancelled = false;
+    let shownStartProblem: string | undefined;
     void window.api.remoteControlDirectGetState().then((s) => {
+      shownStartProblem = s.startProblem;
       if (!cancelled) setDirectState(s);
     });
     void window.api.pairedDevicesList().then((d) => {
@@ -127,7 +129,14 @@ export function RemoteTab() {
     const onWindowFocus = () =>
       void window.api.remoteControlDirectGetTailscaleStatus().then(applyTailscaleStatus);
     window.addEventListener('focus', onWindowFocus);
-    const offDirectState = window.api.onRemoteControlDirectStateChanged((s) => setDirectState(s));
+    const offDirectState = window.api.onRemoteControlDirectStateChanged((s) => {
+      setDirectState(s);
+      // A background check fixed or lost the route. Whether Komla is published comes from
+      // Tailscale, so look there again.
+      if (s.startProblem === shownStartProblem) return;
+      shownStartProblem = s.startProblem;
+      void window.api.remoteControlDirectGetTailscaleStatus().then(applyTailscaleStatus);
+    });
     const offDevices = window.api.onPairedDevicesChanged((d) => setDevices(d));
     return () => {
       cancelled = true;
@@ -369,6 +378,8 @@ export function RemoteTab() {
 
   const directPairingOffer = directState.pairingOffer;
   const server = directState.server;
+  // On in Settings, but the server didn't start yet: Komla keeps trying until it's turned off.
+  const retrying = !server && Boolean(directState.startProblem);
   const localAccess = config?.directRemoteLocalAccess !== false;
   const storagePromptNote = secureStoragePromptNote();
   const tailscaleInstalled = tailscaleStatus?.installed === true;
@@ -393,8 +404,12 @@ export function RemoteTab() {
         <div className="space-y-3">
           <div className="flex items-center gap-4">
             <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium text-foreground">
-              <RemoteStatusDot tone={!server ? 'off' : published ? 'ok' : 'warn'} />
-              {!server ? (
+              <RemoteStatusDot
+                tone={retrying ? 'warn' : !server ? 'off' : published ? 'ok' : 'warn'}
+              />
+              {retrying ? (
+                <span>On, but not running yet</span>
+              ) : !server ? (
                 <span>Remote control is off</span>
               ) : published ? (
                 <>
@@ -430,7 +445,7 @@ export function RemoteTab() {
             <div className="flex shrink-0 items-center gap-2">
               {directBusy ? <Spinner size="sm" /> : null}
               <Switch
-                checked={Boolean(server)}
+                checked={Boolean(server) || retrying}
                 onCheckedChange={(checked) => void handleDirectEnabledChange(checked)}
                 disabled={directBusy}
                 aria-label="Remote control"
@@ -441,7 +456,7 @@ export function RemoteTab() {
           {!server && storagePromptNote && (
             <p className="-mt-1.5 text-xs text-muted-foreground">{storagePromptNote}</p>
           )}
-          {!server && (
+          {!server && !retrying && (
             <p className="text-xs text-muted-foreground">
               The settings below apply while remote control is on.
             </p>
@@ -521,6 +536,11 @@ export function RemoteTab() {
               {server
                 ? 'Turn remote control off to pick another under Network options.'
                 : 'Pick another under Network options.'}
+            </Callout>
+          )}
+          {directState.startProblem && !tailscaleStatus?.httpsPortTaken && (
+            <Callout tone="warning" size="sm">
+              {directState.startProblem}
             </Callout>
           )}
           {directState.portChange && (

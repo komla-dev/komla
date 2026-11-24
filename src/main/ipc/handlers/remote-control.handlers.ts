@@ -5,11 +5,17 @@ import { IPC } from '../../../shared/constants/ipc-channels';
 import { tailscaleCommand, type TailscaleCommand } from '../../lib/tailscale-command';
 import { configService } from '../../services/config.service';
 import { pairedDeviceRegistryService } from '../../services/paired-device-registry.service';
-import { startPersistedDirectRemoteServer } from '../../services/remote-control-direct-autostart.service';
+import {
+  forgetPersistedDirectRemoteServer,
+  startPersistedDirectRemoteServer,
+  watchPersistedTailscaleRoute,
+  withTailscaleRouteLock,
+} from '../../services/remote-control-direct-autostart.service';
 import { remoteControlHostAccessService } from '../../services/remote-control-host-access.service';
 import { remoteControlKeepAwakeService } from '../../services/remote-control-keep-awake.service';
 import {
   DEFAULT_HTTPS_PORT,
+  formatTailscaleError,
   getHttpsPort,
   hasHttpsRoute,
   isHttpsPortTaken,
@@ -53,6 +59,7 @@ export function registerRemoteControlHandlers(): void {
         publicOrigin,
       });
       persistDirectServerConfig(server, publicOrigin);
+      remoteControlDirectService.setStartProblem(null);
       return server;
     }
   );
@@ -60,28 +67,32 @@ export function registerRemoteControlHandlers(): void {
   handleIpc(IPC.REMOTE_CONTROL_DIRECT_STOP, async (): Promise<void> => {
     const { remoteControlDirectService } =
       await import('../../services/remote-control-direct.service');
-    const config = configService.get();
-    await remoteControlDirectService.stop();
-    let tailscaleCleanupError: unknown;
-    if (config.directRemoteManagedTailscaleOrigin) {
-      try {
-        await remoteControlTailscaleService.stop(config.directRemoteManagedTailscaleOrigin);
-      } catch (err) {
-        tailscaleCleanupError = err;
+    const tailscaleCleanupError = await withTailscaleRouteLock(async () => {
+      const config = configService.get();
+      await remoteControlDirectService.stop();
+      let cleanupError: unknown;
+      if (config.directRemoteManagedTailscaleOrigin) {
+        try {
+          await remoteControlTailscaleService.stop(config.directRemoteManagedTailscaleOrigin);
+        } catch (err) {
+          cleanupError = err;
+        }
       }
-    }
-    syncKeepAwake(
-      configService.update({
-        directRemoteEnabled: false,
-        directRemoteManagedTailscaleOrigin: tailscaleCleanupError
-          ? config.directRemoteManagedTailscaleOrigin
-          : undefined,
-      })
-    );
+      syncKeepAwake(
+        configService.update({
+          directRemoteEnabled: false,
+          directRemoteManagedTailscaleOrigin: cleanupError
+            ? config.directRemoteManagedTailscaleOrigin
+            : undefined,
+        })
+      );
+      return cleanupError;
+    });
+    forgetPersistedDirectRemoteServer();
     // Hosts Komla can't reach now stop their phone servers when it next connects.
     await remoteControlHostAccessService.remoteControlTurnedOff();
     if (tailscaleCleanupError) {
-      throw new Error(formatTailscaleServeError(tailscaleCleanupError));
+      throw new Error(formatTailscaleError(tailscaleCleanupError));
     }
   });
 
@@ -109,40 +120,7 @@ export function registerRemoteControlHandlers(): void {
       if (!options?.publicOrigin) {
         throw new Error('Enter a Tailscale HTTPS origin before starting Tailscale Serve');
       }
-      const { remoteControlDirectService } =
-        await import('../../services/remote-control-direct.service');
-      const config = configService.get();
-      const preferredPort = config.directRemotePort ?? 52864;
-      const existingServer = remoteControlDirectService.getInfo();
-      const initialPublicOrigin = normalizeTailscaleServeOrigin(options.publicOrigin);
-      const server = await remoteControlDirectService.start({
-        port: preferredPort,
-        publicOrigin: initialPublicOrigin,
-      });
-      const publicOrigin = initialPublicOrigin;
-      const managedOrigin = config.directRemoteManagedTailscaleOrigin;
-      let commandArgs: string[];
-      try {
-        commandArgs = await remoteControlTailscaleService.configure(
-          publicOrigin,
-          server.port,
-          managedOrigin
-        );
-      } catch (err) {
-        if (existingServer) {
-          remoteControlDirectService.setPublicOrigin(
-            existingServer.httpOrigin === existingServer.localOrigin
-              ? undefined
-              : existingServer.httpOrigin
-          );
-        } else {
-          await remoteControlDirectService.stop();
-          syncKeepAwake(configService.get());
-        }
-        throw new Error(formatTailscaleServeError(err));
-      }
-      persistDirectServerConfig(server, publicOrigin, publicOrigin);
-      return { server, command: formatCommand(tailscaleCommand().display, commandArgs) };
+      return withTailscaleRouteLock(() => startTailscaleServe(options.publicOrigin!));
     }
   );
 
@@ -187,7 +165,7 @@ export function registerRemoteControlHandlers(): void {
         return {
           installed: false,
           command: serveCommand(savedHttpsPort ?? managedHttpsPort ?? DEFAULT_HTTPS_PORT),
-          error: formatTailscaleServeError(err),
+          error: formatTailscaleError(err),
         };
       }
     }
@@ -311,16 +289,6 @@ function normalizeTailscaleServeOrigin(rawOrigin: string): string {
   return parsed.origin;
 }
 
-function formatTailscaleServeError(err: unknown): string {
-  const nodeErr = err as NodeJS.ErrnoException & { stderr?: string };
-  if (nodeErr.code === 'ENOENT') {
-    return 'Could not find the tailscale command. Install Tailscale, then try again.';
-  }
-  const stderr = typeof nodeErr.stderr === 'string' ? nodeErr.stderr.trim() : '';
-  if (stderr) return stderr;
-  return nodeErr.message || 'Failed to start Tailscale Serve';
-}
-
 async function readTailscaleSelf(
   tailscale: TailscaleCommand
 ): Promise<{ hostname?: string; needsSignIn: boolean }> {
@@ -358,4 +326,45 @@ async function execFileText(
   const result = await execFileAsync(command, args, options);
   if (typeof result === 'string') return { stdout: result, stderr: '' };
   return result as { stdout: string; stderr: string };
+}
+
+async function startTailscaleServe(
+  requestedOrigin: string
+): Promise<RemoteControlDirectTailscaleServeResult> {
+  const { remoteControlDirectService } =
+    await import('../../services/remote-control-direct.service');
+  const config = configService.get();
+  const preferredPort = config.directRemotePort ?? 52864;
+  const existingServer = remoteControlDirectService.getInfo();
+  const initialPublicOrigin = normalizeTailscaleServeOrigin(requestedOrigin);
+  const server = await remoteControlDirectService.start({
+    port: preferredPort,
+    publicOrigin: initialPublicOrigin,
+  });
+  const publicOrigin = initialPublicOrigin;
+  const managedOrigin = config.directRemoteManagedTailscaleOrigin;
+  let commandArgs: string[];
+  try {
+    commandArgs = await remoteControlTailscaleService.configure(
+      publicOrigin,
+      server.port,
+      managedOrigin
+    );
+  } catch (err) {
+    if (existingServer) {
+      remoteControlDirectService.setPublicOrigin(
+        existingServer.httpOrigin === existingServer.localOrigin
+          ? undefined
+          : existingServer.httpOrigin
+      );
+    } else {
+      await remoteControlDirectService.stop();
+      syncKeepAwake(configService.get());
+    }
+    throw new Error(formatTailscaleError(err));
+  }
+  persistDirectServerConfig(server, publicOrigin, publicOrigin);
+  remoteControlDirectService.setStartProblem(null);
+  watchPersistedTailscaleRoute();
+  return { server, command: formatCommand(tailscaleCommand().display, commandArgs) };
 }
