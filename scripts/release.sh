@@ -937,8 +937,9 @@ phase_build_mac() {
   [[ "$build_arm64" == "true" ]] && builder_args+=(--arm64)
   [[ "$build_x64" == "true" ]] && builder_args+=(--x64)
 
-  # afterPack fails the build if the app is missing its ripgrep binary, and
-  # removes stale build/ dirs from native modules (node-pty, @parcel/watcher)
+  # afterPack removes other targets' per-platform native packages, fails the
+  # build if the app is missing its own (scripts/native-platform-packages.cjs),
+  # and removes stale build/ dirs from native modules (node-pty, @parcel/watcher)
   # so the correct per-arch prebuild is always used.
   # In parallel mode it also swaps pre-cached keyboard-layout binaries
   # and disables npmRebuild to keep node_modules/ stable across jobs.
@@ -1528,34 +1529,23 @@ build_all_platforms() {
   npm run build:native:matrix
   npm run build
 
-  # Pre-install @parcel/watcher and @vscode/ripgrep platform packages for all
-  # target platforms. npm only installs the host platform's optional dep by
-  # default, and electron-builder ships only what is on disk. afterPack asserts
-  # these exist, and in parallel mode npmRebuild=false means electron-builder
-  # won't install cross-arch variants.
-  local watcher_pkgs=()
-  if should_build "mac"; then
-    watcher_pkgs+=("@parcel/watcher-darwin-arm64:darwin:arm64" "@parcel/watcher-darwin-x64:darwin:x64")
-    watcher_pkgs+=("@vscode/ripgrep-darwin-arm64:darwin:arm64" "@vscode/ripgrep-darwin-x64:darwin:x64")
-  fi
-  if should_build "windows"; then
-    watcher_pkgs+=("@parcel/watcher-win32-x64:win32:x64" "@parcel/watcher-win32-arm64:win32:arm64")
-    # build-windows.sh reinstalls its prebuilds (pruning other --no-save packages
-    # mid-build) unless the ripgrep variants are present too.
-    watcher_pkgs+=("@vscode/ripgrep-win32-x64:win32:x64" "@vscode/ripgrep-win32-arm64:win32:arm64")
-  fi
-  if [[ ${#watcher_pkgs[@]} -gt 0 ]]; then
-    info "Pre-installing @parcel/watcher and @vscode/ripgrep platform packages..."
-    local watcher_install_args=()
-    for watcher_spec in "${watcher_pkgs[@]}"; do
-      local watcher_pkg="${watcher_spec%%:*}"
-      local watcher_version
-      local watcher_parent="@parcel/watcher"
-      [[ "$watcher_pkg" == @vscode/ripgrep-* ]] && watcher_parent="@vscode/ripgrep"
-      watcher_version=$(node -p "require('./node_modules/${watcher_parent}/package.json').optionalDependencies['$watcher_pkg']")
-      watcher_install_args+=("${watcher_pkg}@${watcher_version}")
-    done
-    npm install --no-save --force "${watcher_install_args[@]}"
+  # Pre-install the per-platform native packages (ripgrep, @parcel/watcher,
+  # sherpa-onnx) for all macOS and Windows targets. npm only installs the host
+  # platform's optional dep by default, and electron-builder ships only what is
+  # on disk. afterPack asserts these exist, and in parallel mode npmRebuild=false
+  # means electron-builder won't install cross-arch variants. build-windows.sh
+  # reinstalls its packages (pruning other --no-save packages mid-build) unless
+  # all of them are present. Linux builds install their own in Docker.
+  local native_targets=()
+  should_build "mac" && native_targets+=(darwin-arm64 darwin-x64)
+  should_build "windows" && native_targets+=(win32-x64 win32-arm64)
+  if [[ ${#native_targets[@]} -gt 0 ]]; then
+    info "Pre-installing per-platform native packages for ${native_targets[*]}..."
+    local native_specs_out
+    native_specs_out=$(node scripts/native-platform-packages.cjs "${native_targets[@]}")
+    local native_specs=()
+    while IFS= read -r native_spec; do native_specs+=("$native_spec"); done <<< "$native_specs_out"
+    npm install --no-save --force "${native_specs[@]}"
   fi
 
   if [[ "$PARALLEL_BUILDS" == "true" ]]; then

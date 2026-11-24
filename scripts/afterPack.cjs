@@ -1,13 +1,17 @@
 const path = require('path');
 const fs = require('fs');
 
+const { isPlatformPackage, platformPackages } = require('./native-platform-packages.cjs');
+
 // electron-builder Arch enum: ia32 = 0, x64 = 1, armv7l = 2, arm64 = 3, universal = 4
 const ARCH_MAP = { 1: 'x64', 3: 'arm64' };
 
 /**
  * electron-builder afterPack hook.
  *
- * macOS and Windows: verify the per-arch ripgrep platform package was bundled.
+ * All platforms: remove the other targets' per-platform native packages
+ *   (ripgrep, @parcel/watcher, sherpa-onnx), and verify the target's own were
+ *   bundled.
  * macOS (parallel mode): swap pre-cached per-arch keyboard-layout native module
  *   (cache populated by release script).
  * macOS (all builds): remove stale build/ dirs from native modules that ship
@@ -19,9 +23,8 @@ module.exports = async function afterPack(context) {
     throw new Error(`afterPack: unsupported arch ${context.arch}`);
   }
 
-  if (context.electronPlatformName === 'win32' || context.electronPlatformName === 'darwin') {
-    verifyRipgrep(context, arch);
-  }
+  removeOtherTargetsPackages(context, arch);
+  verifyPlatformPackages(context, arch);
 
   if (context.electronPlatformName === 'darwin') {
     if (process.env.NATIVE_MODULES_CACHE) {
@@ -46,25 +49,53 @@ function getResourcesBase(context) {
 }
 
 /**
- * The main process imports @vscode/ripgrep at startup and it throws without its
- * platform package, so an app missing that package does not launch at all.
+ * electron-builder ships every package on disk whatever its os and cpu, and a
+ * build host has other targets' packages installed for their builds, so each
+ * app would carry every platform's binaries: about 30 MB per sherpa-onnx build,
+ * and DLLs a Windows release would sign in both of its apps. Remove them
+ * before signing. Their app.asar entries stay, marked unpacked, which nothing
+ * reads because nothing requires another platform's package.
  */
-function verifyRipgrep(context, arch) {
-  const rgBinary = path.join(
-    getResourcesBase(context),
-    'app.asar.unpacked',
-    'node_modules',
-    '@vscode',
-    `ripgrep-${context.electronPlatformName}-${arch}`,
-    'bin',
-    context.electronPlatformName === 'win32' ? 'rg.exe' : 'rg'
-  );
-
-  if (!fs.existsSync(rgBinary)) {
-    throw new Error(`afterPack: expected ${rgBinary} but not found`);
+function removeOtherTargetsPackages(context, arch) {
+  const unpackedModules = path.join(getResourcesBase(context), 'app.asar.unpacked', 'node_modules');
+  if (!fs.existsSync(unpackedModules)) return;
+  const own = new Set(platformPackages(context.electronPlatformName, arch).map(({ name }) => name));
+  const names = fs
+    .readdirSync(unpackedModules)
+    .flatMap((entry) =>
+      entry.startsWith('@')
+        ? fs.readdirSync(path.join(unpackedModules, entry)).map((child) => `${entry}/${child}`)
+        : [entry]
+    );
+  for (const name of names) {
+    if (!isPlatformPackage(name) || own.has(name)) continue;
+    fs.rmSync(path.join(unpackedModules, name), { recursive: true, force: true });
+    console.log(`  afterPack: removed ${name}, which this target does not load`);
   }
+}
 
-  console.log(`  afterPack: verified ripgrep ${arch} binary`);
+/**
+ * npm installs only the build host's variant of a per-platform package, and an
+ * app missing its target's variant fails only when the module is first used:
+ * at startup for ripgrep, but not until the first voice transcription for
+ * sherpa-onnx. So fail the build instead.
+ */
+function verifyPlatformPackages(context, arch) {
+  const unpackedModules = path.join(getResourcesBase(context), 'app.asar.unpacked', 'node_modules');
+  const packages = platformPackages(context.electronPlatformName, arch);
+  const missing = packages.filter(
+    ({ name, binary }) => !fs.existsSync(path.join(unpackedModules, name, binary))
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `afterPack: the ${context.electronPlatformName}-${arch} app is missing native packages from ` +
+        `${unpackedModules}. Install them with ` +
+        `npm install --no-save --force $(node scripts/native-platform-packages.cjs ` +
+        `${context.electronPlatformName}-${arch}):\n` +
+        missing.map(({ name, binary }) => `  ${name} (${binary})`).join('\n')
+    );
+  }
+  console.log(`  afterPack: verified ${packages.map(({ name }) => name).join(', ')}`);
 }
 
 function swapKeyboardLayout(context, arch) {
@@ -131,10 +162,6 @@ function removeStaleBuildDirs(context, arch) {
   // back to build/Release/watcher.node if the platform package fails to load
   const watcherDir = path.join(unpackedModules, '@parcel', 'watcher');
   if (fs.existsSync(watcherDir)) {
-    const platformPkg = path.join(unpackedModules, '@parcel', `watcher-darwin-${arch}`);
-    if (!fs.existsSync(platformPkg)) {
-      throw new Error(`afterPack: @parcel/watcher-darwin-${arch} package not found`);
-    }
     const buildDir = path.join(watcherDir, 'build');
     if (fs.existsSync(buildDir)) {
       fs.rmSync(buildDir, { recursive: true, force: true });

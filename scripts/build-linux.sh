@@ -87,6 +87,9 @@ docker run --rm \
       const yaml = require('js-yaml');
       const config = yaml.load(fs.readFileSync('electron-builder.yml', 'utf8'));
       config.linux.target = [{ target: 'AppImage', arch: ['$ARCH'] }];
+      // Fails the build if a per-platform native package (ripgrep,
+      // @parcel/watcher, sherpa-onnx) for this arch is missing from the app.
+      config.afterPack = './scripts/afterPack.cjs';
       if (process.env.KOMLA_ENV === 'staging') {
         config.appId = 'com.komla.staging';
         config.productName = 'Komla Staging';

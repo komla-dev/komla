@@ -41,18 +41,22 @@ cd "$PROJECT_ROOT"
 
 # Install Windows prebuilt native modules for cross-compilation.
 # Unlike node-pty (which ships all platform prebuilds in one package),
-# @parcel/watcher uses separate per-platform npm packages and only the
-# host platform variant is installed by default.
+# ripgrep, @parcel/watcher and sherpa-onnx use separate per-platform npm
+# packages and only the host platform variant is installed by default.
+# scripts/native-platform-packages.cjs lists them, and afterPack fails the
+# build if one is missing from the app.
 # Skip if already installed (the release script pre-installs these before
 # parallel builds to avoid mutating node_modules/ during concurrent packaging).
-if [[ ! -d "$PROJECT_ROOT/node_modules/@parcel/watcher-win32-x64" ]] || [[ ! -d "$PROJECT_ROOT/node_modules/@parcel/watcher-win32-arm64" ]] || \
-   [[ ! -d "$PROJECT_ROOT/node_modules/@vscode/ripgrep-win32-x64" ]] || [[ ! -d "$PROJECT_ROOT/node_modules/@vscode/ripgrep-win32-arm64" ]]; then
+WIN_NATIVE_SPECS=()
+WIN_NATIVE_SPECS_OUT=$(node scripts/native-platform-packages.cjs win32-x64 win32-arm64)
+while IFS= read -r spec; do WIN_NATIVE_SPECS+=("$spec"); done <<< "$WIN_NATIVE_SPECS_OUT"
+WIN_NATIVE_MISSING=false
+for spec in "${WIN_NATIVE_SPECS[@]}"; do
+  [[ -d "$PROJECT_ROOT/node_modules/${spec%@*}" ]] || WIN_NATIVE_MISSING=true
+done
+if [[ "$WIN_NATIVE_MISSING" == "true" ]]; then
   echo "==> Installing Windows native module prebuilds..."
-  npm install --no-save --force \
-    @parcel/watcher-win32-x64 \
-    @parcel/watcher-win32-arm64 \
-    @vscode/ripgrep-win32-x64 \
-    @vscode/ripgrep-win32-arm64
+  npm install --no-save --force "${WIN_NATIVE_SPECS[@]}"
 else
   echo "==> Windows native module prebuilds already installed, skipping"
 fi

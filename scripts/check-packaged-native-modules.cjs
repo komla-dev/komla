@@ -4,6 +4,9 @@
  * transcription and keyboard layouts load their modules only when first used, so
  * launching the app does not show that their files shipped.
  *
+ * This runs only for the build host's own platform and arch. For every packaged
+ * target, afterPack checks that its per-platform native packages shipped.
+ *
  * Usage: ELECTRON_RUN_AS_NODE=1 <packaged app executable> \
  *   scripts/check-packaged-native-modules.cjs <path to app.asar>
  */
