@@ -113,6 +113,20 @@ function readSidesDecision(): string[] {
   ];
 }
 
+function noChanges(): WorktreeDiff {
+  return { files: [], summary: { additions: 0, deletions: 0, filesChanged: 0 } };
+}
+
+const FOLDER_MISSING_MARKER = 'STATUS=WORKSPACE_FOLDER_MISSING';
+
+/** The workspace's folder is gone from its host, as when its worktree was removed there. */
+class WorkspaceFolderMissingError extends Error {
+  constructor(hostName: string) {
+    super(`The workspace's folder is gone from ${hostName}.`);
+    this.name = 'WorkspaceFolderMissingError';
+  }
+}
+
 function assertRemoteEncodingAvailable(output: string): void {
   if (output.split('\n').includes('STATUS=ENCODING_UNAVAILABLE')) {
     throw new Error('Remote host needs base64 or openssl to view diffs');
@@ -122,10 +136,38 @@ function assertRemoteEncodingAvailable(output: string): void {
 class SshWorkspaceDiff {
   private renameSources = new Map<string, Map<string, string>>();
 
+  /**
+   * Its changes, or none when its folder is gone from the host: as for a workspace already known
+   * to be missing from its host, until a sync records that.
+   */
   async getWorkingTreeDiff(workspace: Workspace): Promise<WorktreeDiff> {
-    if (!hasWorkspaceFiles(workspace)) {
-      return { files: [], summary: { additions: 0, deletions: 0, filesChanged: 0 } };
+    return await this.noChangesWhenFolderMissing(() => this.readWorkingTreeDiff(workspace));
+  }
+
+  /** Its changes against a branch, or none when its folder is gone from the host. */
+  async getWorkingTreeDiffAgainstBranch(
+    workspace: Workspace,
+    branch: string,
+    useMergeBase: boolean
+  ): Promise<WorktreeDiff> {
+    return await this.noChangesWhenFolderMissing(() =>
+      this.readWorkingTreeDiffAgainstBranch(workspace, branch, useMergeBase)
+    );
+  }
+
+  private async noChangesWhenFolderMissing(
+    read: () => Promise<WorktreeDiff>
+  ): Promise<WorktreeDiff> {
+    try {
+      return await read();
+    } catch (error) {
+      if (error instanceof WorkspaceFolderMissingError) return noChanges();
+      throw error;
     }
+  }
+
+  private async readWorkingTreeDiff(workspace: Workspace): Promise<WorktreeDiff> {
+    if (!hasWorkspaceFiles(workspace)) return noChanges();
 
     const snapshot = workspaceStatusService.read({
       kind: 'working-tree-for-diff',
@@ -153,14 +195,12 @@ class SshWorkspaceDiff {
     return { files, summary: summarize(files) };
   }
 
-  async getWorkingTreeDiffAgainstBranch(
+  private async readWorkingTreeDiffAgainstBranch(
     workspace: Workspace,
     branch: string,
     useMergeBase: boolean
   ): Promise<WorktreeDiff> {
-    if (!hasWorkspaceFiles(workspace)) {
-      return { files: [], summary: { additions: 0, deletions: 0, filesChanged: 0 } };
-    }
+    if (!hasWorkspaceFiles(workspace)) return noChanges();
 
     const output = await this.run(
       workspace,
@@ -190,7 +230,7 @@ class SshWorkspaceDiff {
     );
     // Untracked files are absent from git diff. Reuse the working-tree counts so
     // branch comparisons follow the same counting policy as workspace cards.
-    const workingTree = await this.getWorkingTreeDiff(workspace);
+    const workingTree = await this.readWorkingTreeDiff(workspace);
     const existingPaths = new Set(files.map((file) => file.path));
     files.push(
       ...workingTree.files.filter(
@@ -461,13 +501,22 @@ class SshWorkspaceDiff {
     return values;
   }
 
-  private run(workspace: Workspace, script: string): Promise<string> {
+  /** Runs the script in the workspace's folder, or throws WorkspaceFolderMissingError. */
+  private async run(workspace: Workspace, script: string): Promise<string> {
     const backend = getBackend(workspace);
     const host = sshWorkspaceService.getHost(backend.hostId);
-    return sshWorkspaceService.run(
+    const folder = shellQuotePosix(backend.remoteDirectory);
+    // Only a folder that isn't there is gone: one Komla can't enter fails with cd's reason.
+    const missing = `if [ ! -e ${folder} ]; then printf "\\n${FOLDER_MISSING_MARKER}\\n"; exit 0; fi`;
+    const output = await sshWorkspaceService.run(
       host,
-      `cd ${shellQuotePosix(backend.remoteDirectory)} || exit 1; ${script}`
+      `${missing}; cd ${folder} || exit 1; ${script}`
     );
+    // On a line of its own, after whatever a login profile prints.
+    if (output.split('\n').includes(FOLDER_MISSING_MARKER)) {
+      throw new WorkspaceFolderMissingError(host.name);
+    }
+    return output;
   }
 }
 
