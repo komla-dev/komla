@@ -31,8 +31,9 @@ komla desktop run -- <app command>        # on an SSH host, shows the app on a v
 ```
 
 `komla <command> --help` shows a command's options and examples, such as `--from-current-branch`
-for `komla launch`, which branches a new workspace from this one; `komla --help` lists every
-command.
+for `komla launch`, which branches a new workspace from this one, and `--branch <name>`, which
+opens a branch the project already has as it is rather than starting a new one; `komla --help`
+lists every command.
 
 Rules:
 

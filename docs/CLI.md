@@ -183,6 +183,22 @@ workspace reach a desktop the same way, which acts only on that host's workspace
 the new worktree from the branch checked out in the calling workspace instead of the project's base
 branch; uncommitted changes are not copied.
 
+`komla launch --branch <name>` opens a branch that already exists: when the project has a branch of
+that name, locally or as `origin/<name>` from its last fetch, the new workspace checks that branch
+out rather than starting a new one. A local branch behind `origin/<name>` is fast-forwarded to it,
+and the branch tracks `origin/<name>` when origin has it. Launch doesn't fetch, so run `git fetch`
+first for a branch pushed since. This is how to bring existing branches into Komla, such as
+worktrees moved from another tool: `komla launch --project api --branch feature/login "Continue
+the login work"`. A name no branch has starts a new branch from the project's target branch, or
+from the calling workspace's branch with `--from-current-branch`. The project's branch prefix goes
+before a name that doesn't start with it, so with a prefix such as `me/` set, `--branch login`
+means `me/login`, and only branches under the prefix can be opened this way. A branch another
+workspace has open is refused rather than renamed, and so is one checked out in a worktree outside
+Komla, since Git checks a branch out in one worktree at a time: remove that worktree first. A
+launch that lands on an SSH host, from an SSH workspace, an SSH host's shell or with agent launches
+set to start there, only starts new branches, and a name the host already has is refused; open an
+existing branch there from New Workspace, with Open on the branch in its branch picker.
+
 `komla launch --draft` starts nothing: it opens New Workspace in the window showing the calling
 workspace, brought forward, with the prompt, project, agent (`--preset`), mode (`--mode`) and, with
 `--from-current-branch`, the starting branch filled in, and answers `state: drafted` with

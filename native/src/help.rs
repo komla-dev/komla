@@ -242,7 +242,7 @@ const COMMANDS: &[Command] = &[
             ("--project <name-or-id>", "The project for the new workspace. Outside every workspace, such as in an SSH host's shell, it's required, and leaving it out lists the projects."),
             ("--name <name>", "The new workspace's title."),
             ("--description <text>", "The new workspace's description."),
-            ("--branch <name>", "The new workspace's branch."),
+            ("--branch <name>", "The new workspace's branch. A branch the project already has, locally or as origin/<name> from the last fetch, is checked out instead of starting a new one; any other name starts a new branch. The project's branch prefix goes before a name without it. A workspace on an SSH host refuses a branch the host already has."),
             ("--from-current-branch", "Branch from this workspace's branch instead of the base branch."),
             ("--draft", "Open New Workspace with the prompt, project, agent and mode filled in, for the user to change and start, instead of starting it."),
             JSON,
@@ -251,6 +251,7 @@ const COMMANDS: &[Command] = &[
             "komla launch \"Fix the flaky login test\"",
             "komla launch --here --preset codex \"Review the diff\"",
             "komla launch --draft \"Fix the flaky login test\"",
+            "komla launch --branch feature/login \"Continue the login work\"",
         ],
     },
     Command {
