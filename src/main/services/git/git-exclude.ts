@@ -52,3 +52,22 @@ export async function addGitExcludeRule(
   const prefix = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
   writeFileSync(excludePath, `${existing}${prefix}${header}\n${rule}\n`, 'utf-8');
 }
+
+/**
+ * Append the lines of the exclude file at `fromPath` to the one at `toPath`, skipping blank lines
+ * and lines `toPath` has already, such as Git's template comments or a rule Komla added. The
+ * source's own repeats stay, since the last matching rule wins, and lines compare whole, since an
+ * escaped trailing space is part of a pattern. A missing `fromPath` leaves `toPath` as it is.
+ */
+export function mergeGitExcludeFile(fromPath: string, toPath: string): void {
+  if (!existsSync(fromPath)) return;
+  const existing = existsSync(toPath) ? readFileSync(toPath, 'utf-8') : '';
+  const present = new Set(existing.split(/\r?\n/));
+  const added = readFileSync(fromPath, 'utf-8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== '' && !present.has(line));
+  if (added.length === 0) return;
+  mkdirSync(dirname(toPath), { recursive: true });
+  const prefix = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+  writeFileSync(toPath, `${existing}${prefix}${added.join('\n')}\n`, 'utf-8');
+}

@@ -22,9 +22,11 @@ import {
   isInLinkedWorkspaces,
   isLinkedWorkspacesEntry,
 } from '../../../shared/lib/linked-workspaces';
+import { createLogger } from '../../lib/logger';
 import { applySshAskpassEnv } from '../../lib/ssh-client';
 import { askpassService } from '../askpass.service';
 
+import { mergeGitExcludeFile } from './git-exclude';
 import { gitExec, extractGitError, gitUsesPathSsh, GitProgressCallback } from './git-exec';
 import {
   KOMLA_FILES_DIR,
@@ -32,6 +34,8 @@ import {
   KOMLA_FILES_GITIGNORE_CONTENT,
 } from './git-status';
 import { listFolderFiles } from './list-folder-files';
+
+const logger = createLogger('GitRepo');
 
 // Ignored files are listed one by one, so a tree full of them could make the listing huge.
 const IGNORED_LISTING_MAX_CHARS = 1_000_000;
@@ -94,6 +98,31 @@ class GitRepoService {
     }
 
     await gitExec.execGitAsync(parentDir, ['clone', '--bare', '--', sourcePath, destinationPath]);
+    await this.copyGitExclude(sourcePath, destinationPath);
+  }
+
+  /**
+   * Carry the source's `info/exclude` over to a bare clone of it, which `git clone` never copies:
+   * without it, files the user excluded locally show up as untracked in every workspace. Git
+   * resolves the path, so a linked worktree source gives its common gitdir's file and a bare
+   * source its own. A failure only logs, since the clone itself is complete.
+   */
+  private async copyGitExclude(sourcePath: string, clonePath: string): Promise<void> {
+    try {
+      const output = await gitExec.execGitAsync(sourcePath, [
+        'rev-parse',
+        '--git-path',
+        'info/exclude',
+      ]);
+      const sourceExclude = output.trim();
+      if (!sourceExclude) return;
+      mergeGitExcludeFile(
+        isAbsolute(sourceExclude) ? sourceExclude : join(sourcePath, sourceExclude),
+        join(clonePath, 'info', 'exclude')
+      );
+    } catch (error) {
+      logger.warn(`Failed to copy info/exclude from ${sourcePath}:`, error);
+    }
   }
 
   /**

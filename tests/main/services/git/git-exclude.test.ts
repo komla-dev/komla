@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   addGitExcludeRule,
+  mergeGitExcludeFile,
   resolveGitExcludePath,
 } from '../../../../src/main/services/git/git-exclude';
 
@@ -95,5 +96,46 @@ describe('git exclude', () => {
     for (let index = 0; index < worktrees.length; index++) {
       expect(lines).toContain(`/rule-${index}/*`);
     }
+  });
+
+  it("merges another exclude file's lines into one that already has rules, without repeats", () => {
+    const from = join(root, 'from-exclude');
+    const to = join(root, 'to', 'info', 'exclude');
+    writeFileSync(from, '# git template\r\n.env.local\r\nlinked-workspaces/\r\nscratch/');
+    mkdirSync(join(root, 'to', 'info'), { recursive: true });
+    writeFileSync(to, '# git template\n# Komla\nlinked-workspaces/');
+
+    mergeGitExcludeFile(from, to);
+
+    expect(readFileSync(to, 'utf-8')).toBe(
+      '# git template\n# Komla\nlinked-workspaces/\n.env.local\nscratch/\n'
+    );
+  });
+
+  it('creates the exclude file when the target has none, and skips a missing source', () => {
+    const from = join(root, 'from-exclude');
+    const to = join(root, 'to', 'info', 'exclude');
+    writeFileSync(from, 'notes.md\n');
+
+    mergeGitExcludeFile(join(root, 'missing'), to);
+    expect(() => readFileSync(to)).toThrow();
+
+    mergeGitExcludeFile(from, to);
+    expect(readFileSync(to, 'utf-8')).toBe('notes.md\n');
+  });
+
+  it("keeps the source's own repeats and escaped trailing spaces, which change what git ignores", () => {
+    const from = join(root, 'from-exclude');
+    const to = join(root, 'to', 'info', 'exclude');
+    // The last match wins, so the second build/ ignores build/keep again.
+    writeFileSync(from, 'build/\n!build/keep\nbuild/\nfoo\\ \nfoo\\\n');
+    mkdirSync(join(root, 'to', 'info'), { recursive: true });
+    writeFileSync(to, '# git template\n');
+
+    mergeGitExcludeFile(from, to);
+
+    expect(readFileSync(to, 'utf-8')).toBe(
+      '# git template\nbuild/\n!build/keep\nbuild/\nfoo\\ \nfoo\\\n'
+    );
   });
 });

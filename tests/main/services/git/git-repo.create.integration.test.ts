@@ -3,7 +3,7 @@
  * (common install folders, not only PATH) and report git's own error message.
  */
 import { execFile } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
@@ -123,6 +123,70 @@ describe('gitRepoService project creation', () => {
     const clonePath = join(tempDir, 'repos', 'source', '.git');
 
     hideGitFromPath();
+    await service.cloneBare(sourcePath, clonePath);
+
+    expect(await git(['-C', clonePath, 'log', '--format=%s', 'main'])).toBe('first');
+  });
+
+  function excludeRules(gitDir: string): string[] {
+    return readFileSync(join(gitDir, 'info', 'exclude'), 'utf-8')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'));
+  }
+
+  it("copies the source's info/exclude into the clone", async () => {
+    const sourcePath = join(tempDir, 'source');
+    await git(['init', '-q', '-b', 'main', sourcePath]);
+    await git(['-C', sourcePath, 'commit', '-q', '--allow-empty', '-m', 'first']);
+    writeFileSync(join(sourcePath, '.git', 'info', 'exclude'), '# mine\n.env.local\nscratch/\n');
+    const service = await loadService();
+    const clonePath = join(tempDir, 'repos', 'source', '.git');
+
+    await service.cloneBare(sourcePath, clonePath);
+
+    expect(excludeRules(clonePath)).toEqual(['.env.local', 'scratch/']);
+    expect(readFileSync(join(clonePath, 'info', 'exclude'), 'utf-8')).toContain('# mine\n');
+  });
+
+  it('copies info/exclude from a linked worktree source, which reads the common one', async () => {
+    const mainPath = join(tempDir, 'main');
+    await git(['init', '-q', '-b', 'main', mainPath]);
+    await git(['-C', mainPath, 'commit', '-q', '--allow-empty', '-m', 'first']);
+    writeFileSync(join(mainPath, '.git', 'info', 'exclude'), 'notes.md\n');
+    const worktreePath = join(tempDir, 'feature');
+    await git(['-C', mainPath, 'worktree', 'add', '-q', '-b', 'feature', worktreePath]);
+    const service = await loadService();
+    const clonePath = join(tempDir, 'repos', 'feature', '.git');
+
+    await service.cloneBare(worktreePath, clonePath);
+
+    expect(excludeRules(clonePath)).toEqual(['notes.md']);
+  });
+
+  it('copies info/exclude from a bare source', async () => {
+    const workPath = join(tempDir, 'work');
+    await git(['init', '-q', '-b', 'main', workPath]);
+    await git(['-C', workPath, 'commit', '-q', '--allow-empty', '-m', 'first']);
+    const barePath = join(tempDir, 'app.git');
+    await git(['clone', '-q', '--bare', workPath, barePath]);
+    writeFileSync(join(barePath, 'info', 'exclude'), 'build-local/\n');
+    const service = await loadService();
+    const clonePath = join(tempDir, 'repos', 'app', '.git');
+
+    await service.cloneBare(barePath, clonePath);
+
+    expect(excludeRules(clonePath)).toEqual(['build-local/']);
+  });
+
+  it('clones a source without info/exclude', async () => {
+    const sourcePath = join(tempDir, 'source');
+    await git(['init', '-q', '-b', 'main', sourcePath]);
+    await git(['-C', sourcePath, 'commit', '-q', '--allow-empty', '-m', 'first']);
+    rmSync(join(sourcePath, '.git', 'info'), { recursive: true, force: true });
+    const service = await loadService();
+    const clonePath = join(tempDir, 'repos', 'source', '.git');
+
     await service.cloneBare(sourcePath, clonePath);
 
     expect(await git(['-C', clonePath, 'log', '--format=%s', 'main'])).toBe('first');
