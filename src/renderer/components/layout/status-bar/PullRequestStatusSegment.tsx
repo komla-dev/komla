@@ -58,16 +58,55 @@ const STATE_LABELS: Record<PullRequestSummary['state'], string> = {
   closed: 'Closed',
 };
 
+/** How long after its last good read a pull request stands in for reads that fail. */
+const HOLD_MS = 2 * READ_INTERVAL_MS;
+
+/** The status shown, the branch it was read for, and when its pull request was last read. */
+interface HeldStatus {
+  status: PullRequestStatus;
+  branch?: string;
+  readAt?: number;
+}
+
+/**
+ * A failed read, such as a timeout or a dropped SSH host, keeps the pull request read shortly
+ * before for the same branch, so the item doesn't flicker away. One that keeps failing, such as
+ * an expired token, lets the item hide rather than freeze on old checks. Timed rather than
+ * counted, as the main process answers repeated asks with the same read for a few seconds.
+ */
+function afterRead(
+  previous: HeldStatus | undefined,
+  next: PullRequestStatus,
+  branch: string | undefined,
+  now: number
+): HeldStatus {
+  if (
+    next.kind === 'unavailable' &&
+    next.reason === 'error' &&
+    previous?.status.kind === 'pull-request' &&
+    previous.branch === branch &&
+    now - (previous.readAt ?? 0) < HOLD_MS
+  ) {
+    return previous;
+  }
+  return { status: next, branch, readAt: next.kind === 'pull-request' ? now : undefined };
+}
+
 /**
  * Reads the workspace's pull request every minute while the window shows, every 20 seconds while
  * its checks run, and again when its branch is switched or pushed. Edits to its files don't count.
  */
 function usePullRequestStatus(workspaceId: string): PullRequestStatus | undefined {
+  const currentBranch = useWorkspaceObservationStore(
+    (s) => s.projections.get(workspaceId)?.branch?.currentBranch
+  );
   const pushState = useWorkspaceObservationStore((s) => {
     const branch = s.projections.get(workspaceId)?.branch;
     return branch && `${branch.currentBranch}:${branch.hasRemote}:${branch.unpushedCommits}`;
   });
-  const [status, setStatus] = useState<PullRequestStatus>();
+  const [held, setHeld] = useState<HeldStatus>();
+  // Another branch's pull request never shows while this one's is read.
+  const status = held?.branch === currentBranch ? held?.status : undefined;
   const running = status?.kind === 'pull-request' && status.pullRequest.ci === 'pending';
   useEffect(() => {
     let current = true;
@@ -75,7 +114,9 @@ function usePullRequestStatus(workspaceId: string): PullRequestStatus | undefine
       if (document.hidden) return;
       window.api.getWorkspacePullRequestStatus(workspaceId).then(
         (next) => {
-          if (current) setStatus(next);
+          if (!current) return;
+          const now = Date.now();
+          setHeld((previous) => afterRead(previous, next, currentBranch, now));
         },
         () => {}
       );
@@ -88,7 +129,7 @@ function usePullRequestStatus(workspaceId: string): PullRequestStatus | undefine
       clearInterval(timer);
       document.removeEventListener('visibilitychange', read);
     };
-  }, [workspaceId, pushState, running]);
+  }, [workspaceId, currentBranch, pushState, running]);
   return status;
 }
 
@@ -182,26 +223,24 @@ function PullRequestItem({ workspaceId }: { workspaceId: string }) {
   const status = usePullRequestStatus(workspaceId);
   // Shown by default, so it stays out of the way of whoever doesn't use the GitHub CLI.
   if (!status || status.kind === 'none') return null;
-  if (status.kind === 'unavailable' && status.reason === 'no-gh') return null;
+  // Nor does a read that has only failed (an expired token, an organization's token policy): an
+  // icon that only ever reports an error is noise. The main process logs gh's message.
+  if (status.kind === 'unavailable' && status.reason !== 'signed-out') return null;
 
   if (status.kind === 'unavailable') {
-    const hint =
-      status.reason === 'error'
-        ? `Couldn’t read the pull request${status.message ? `: ${status.message}` : ''}`
-        : SIGNED_OUT_HINT;
     return (
       <Tooltip>
         <TooltipTrigger asChild>
           {/* Nothing to open: the tooltip says what's missing. */}
           <span
             tabIndex={0}
-            aria-label={hint}
+            aria-label={SIGNED_OUT_HINT}
             className={cn(STATUS_BAR_BUTTON_CLASS, 'text-muted-foreground-60')}
           >
             <GitPullRequest aria-hidden="true" className="size-3.5" />
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top">{hint}</TooltipContent>
+        <TooltipContent side="top">{SIGNED_OUT_HINT}</TooltipContent>
       </Tooltip>
     );
   }

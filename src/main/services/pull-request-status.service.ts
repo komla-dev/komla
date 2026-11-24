@@ -10,6 +10,7 @@ import {
 } from '../../shared/lib/workspace-tags';
 import { COMMAND_ATTENTION_SOURCE, isSshWorkspace } from '../../shared/types/workspace';
 import { gitRemoteIdentity } from '../lib/git-remote-identity';
+import { createLogger } from '../lib/logger';
 import { MISSING_COMMAND_ERROR } from '../lib/missing-command';
 
 import { configService } from './config.service';
@@ -255,6 +256,8 @@ interface Watch {
   awaitingChecksAfter?: string | null;
 }
 
+const logger = createLogger('PullRequestStatusService');
+
 /**
  * The pull request of each workspace's branch, read with the GitHub CLI where the workspace's
  * commands run. An SSH workspace on GitHub is read here first, by its branch's name, so its host
@@ -272,6 +275,8 @@ export class PullRequestStatusService {
   private readonly branches = new Map<string, WorkspaceObservationProjection['branch']>();
   /** Workspaces whose repository isn't on GitHub, which tagging stops reading until a restart. */
   private readonly offGitHub = new Set<string>();
+  /** The last gh error logged for each workspace, so a read every minute logs it once. */
+  private readonly loggedErrors = new Map<string, string>();
   private tagTimer?: ReturnType<typeof setInterval>;
   private tagging = false;
   /** A round of tag reads is running, which a slow one can make outlast the interval. */
@@ -406,6 +411,7 @@ export class PullRequestStatusService {
     }
     const branchChanges = this.branchChanges.get(workspace.id);
     const read = await this.readHereOrOnHost(workspace);
+    this.logError(workspace.id, read.status);
     if (this.branchChanges.get(workspace.id) !== branchChanges) return;
     // Asking again every few minutes, on an SSH host over SSH, would only get the same answer.
     if (read.offGitHub) this.offGitHub.add(workspace.id);
@@ -433,6 +439,7 @@ export class PullRequestStatusService {
       this.branchChanges,
       this.watches,
       this.offGitHub,
+      this.loggedErrors,
     ]) {
       for (const workspaceId of map.keys()) {
         if (this.dependencies.getWorkspace(workspaceId)) continue;
@@ -442,11 +449,24 @@ export class PullRequestStatusService {
     }
   }
 
+  // The status bar hides a read that failed, so this log is where its reason shows.
+  private logError(workspaceId: string, status: PullRequestStatus): void {
+    if (status.kind !== 'unavailable' || status.reason !== 'error') {
+      this.loggedErrors.delete(workspaceId);
+      return;
+    }
+    const message = status.message ?? 'unknown error';
+    if (this.loggedErrors.get(workspaceId) === message) return;
+    this.loggedErrors.set(workspaceId, message);
+    logger.warn(`Couldn't read the pull request of workspace ${workspaceId}: ${message}`);
+  }
+
   private async read(workspaceId: string): Promise<PullRequestStatus> {
     const workspace = this.dependencies.getWorkspace(workspaceId);
     if (!workspace) return { kind: 'none' };
     const branchChanges = this.branchChanges.get(workspaceId);
     const read = await this.readHereOrOnHost(workspace);
+    this.logError(workspaceId, read.status);
     // The branch changed while gh ran, and a read since answers for it.
     if (this.branchChanges.get(workspaceId) !== branchChanges) return read.status;
     if (read.status.kind === 'pull-request') {

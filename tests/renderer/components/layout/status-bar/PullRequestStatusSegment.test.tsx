@@ -118,6 +118,72 @@ describe('PullRequestStatusSegment', () => {
     expect(screen.queryByLabelText(/pull request/i)).not.toBeInTheDocument();
   });
 
+  it('shows nothing when gh fails to read the pull request', async () => {
+    status = {
+      kind: 'unavailable',
+      reason: 'error',
+      message: "GraphQL: The 'acme' organization forbids access via a fine-grained token",
+    };
+    await renderSegment();
+
+    expect(screen.queryByLabelText(/pull request/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps showing the pull request when a later read fails', async () => {
+    await renderSegment();
+    status = { kind: 'unavailable', reason: 'error', message: 'The SSH host is not connected' };
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(getWorkspacePullRequestStatus).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByRole('button', { name: 'Pull request: #12 Add search · CI failed' })
+    ).toBeInTheDocument();
+  });
+
+  it('hides the pull request once reads have failed for a couple of minutes', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    await renderSegment();
+    status = { kind: 'unavailable', reason: 'error', message: 'token expired' };
+    const readAt = async (at: number) => {
+      now.mockReturnValue(at);
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    };
+
+    // However often it's asked within them, as gh's answer is shared for a few seconds.
+    for (let read = 0; read < 5; read++) await readAt(1_000);
+    await readAt(119_000);
+    expect(screen.getByText('#12')).toBeInTheDocument();
+
+    await readAt(120_000);
+    expect(screen.queryByLabelText(/pull request/i)).not.toBeInTheDocument();
+    now.mockRestore();
+  });
+
+  it("doesn't show one branch's pull request for another whose read failed", async () => {
+    const onBranch = (currentBranch: string) =>
+      act(() => {
+        useWorkspaceObservationStore.setState({
+          projections: new Map([
+            ['ws-1', { branch: { currentBranch, hasRemote: true, unpushedCommits: 0 } } as never],
+          ]),
+        });
+      });
+    onBranch('feature-a');
+    await renderSegment();
+    expect(screen.getByText('#12')).toBeInTheDocument();
+
+    status = { kind: 'unavailable', reason: 'error', message: 'The SSH host is not connected' };
+    onBranch('feature-b');
+    await act(async () => {});
+
+    expect(getWorkspacePullRequestStatus).toHaveBeenCalledTimes(2);
+    expect(screen.queryByLabelText(/pull request/i)).not.toBeInTheDocument();
+  });
+
   it('reads again when the branch is pushed, not when its files change', async () => {
     const observe = (repositoryRevision: number, unpushedCommits: number) =>
       act(() => {

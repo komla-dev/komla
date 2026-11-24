@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const warn = vi.hoisted(() => vi.fn());
+vi.mock('../../../src/main/lib/logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() }),
+}));
 vi.mock('../../../src/main/services/config.service', () => ({ configService: {} }));
 vi.mock('../../../src/main/services/workspace-command', () => ({
   canRunWorkspaceCommands: vi.fn(),
@@ -272,6 +276,32 @@ describe('PullRequestStatusService', () => {
       pullRequest: expect.objectContaining({ number: 12, ci: 'pending' }),
     });
     expect(run).toHaveBeenCalledWith(workspace, PULL_REQUEST_COMMAND, 15_000, 256 * 1024);
+  });
+
+  it("logs gh's error once while it stays the same, as the status bar hides it", async () => {
+    warn.mockClear();
+    output = new Error('HTTP 502');
+    await service.get('ws-1');
+    await later();
+    await service.get('ws-1');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('HTTP 502'));
+
+    output = new Error('HTTP 504');
+    await later();
+    await service.get('ws-1');
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs gh's error from a read made only for tags", async () => {
+    warn.mockClear();
+    tagging = true;
+    output = new Error('HTTP 502');
+    service.startTagging();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('HTTP 502'));
   });
 
   it('shares a read still running, or just made, with the next caller', async () => {
