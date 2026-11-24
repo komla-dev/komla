@@ -3,7 +3,7 @@
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { LinkedWorkspacesSection } from '../../../../src/renderer/components/terminal/LinkedWorkspacesSection';
 import { TooltipProvider } from '../../../../src/renderer/components/ui/tooltip';
@@ -11,6 +11,8 @@ import { AT_PATH_MIME, isTreeDragActive } from '../../../../src/renderer/lib/tre
 import { useFileListStore } from '../../../../src/renderer/stores/file-list.store';
 import { useProjectsStore } from '../../../../src/renderer/stores/projects.store';
 import { useWorkspacesStore } from '../../../../src/renderer/stores/workspaces.store';
+
+import { recordUnhandledRejections, settleRejections } from '../../../helpers/unhandled-rejections';
 
 import type { Project, Workspace } from '../../../../src/renderer/types';
 
@@ -218,6 +220,48 @@ describe('LinkedWorkspacesSection', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("leaves an SSH peer's diff that failed to load to the next look", async () => {
+    const unhandled = recordUnhandledRejections();
+    const remotePeer = workspace({
+      id: 'remote',
+      name: 'Remote peer',
+      workingDirectory: 'ssh://dev/home/dev/remote',
+      backend: {
+        kind: 'ssh',
+        hostId: 'dev',
+        remoteDirectory: '/home/dev/remote',
+        remoteRepoPath: '/home/dev/remote',
+        remoteProjectRoot: '/home/dev',
+        gitUrl: 'git@example.com:remote.git',
+      },
+    });
+    const from = { ...origin, linkedWorkspaceIds: ['remote'] };
+    // Not a vi.fn: vitest handles the promises its mocks return, to record how they settled.
+    const calls: unknown[][] = [];
+    const fetchDiffIfNeeded = (...args: unknown[]) => {
+      calls.push(args);
+      return Promise.reject(
+        new Error(
+          'Timed out waiting for an SSH command slot. The command was not started; try again.'
+        )
+      );
+    };
+    useWorkspacesStore.setState({ workspaces: [from, remotePeer] });
+    const { fetchDiffIfNeeded: storeFetchDiffIfNeeded } = useFileListStore.getState();
+    onTestFinished(() => useFileListStore.setState({ fetchDiffIfNeeded: storeFetchDiffIfNeeded }));
+    useFileListStore.setState({ fetchDiffIfNeeded } as unknown as Partial<
+      ReturnType<typeof useFileListStore.getState>
+    >);
+
+    renderSection(true, from);
+
+    await waitFor(() =>
+      expect(calls).toEqual([[remotePeer.workingDirectory, undefined, false, 'remote']])
+    );
+    await settleRejections();
+    expect(unhandled).toEqual([]);
   });
 
   it('copies the path and unlinks from the menu', async () => {

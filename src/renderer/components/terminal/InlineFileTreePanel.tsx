@@ -162,7 +162,10 @@ export function InlineFileTreePanel({
   // Fetch diff data on mount and when working directory / comparison branch changes
   useEffect(() => {
     if (!isDataActive || !isGitWorkspace) return;
-    void fetchDiffIfNeeded(workingDirectory, comparisonBranch, useMergeBase, workspaceId);
+    // A diff that failed to load keeps the last one, and the next look loads it again.
+    fetchDiffIfNeeded(workingDirectory, comparisonBranch, useMergeBase, workspaceId).catch(
+      () => {}
+    );
   }, [
     isDataActive,
     isGitWorkspace,
@@ -203,13 +206,16 @@ export function InlineFileTreePanel({
           } else if (!isRemoteWorkspace) {
             void fetchFileStatusesRef.current(workingDirectory);
           }
-          // Force re-fetch (preserves existing data during loading, unlike invalidateDiffs which clears it)
-          void fetchDiffRef.current(
-            workingDirectory,
-            comparisonBranchRef.current,
-            useMergeBaseRef.current,
-            workspaceId
-          );
+          // Force re-fetch (preserves existing data during loading, unlike invalidateDiffs which
+          // clears it). One that fails keeps the last diff, and the next change fetches it again.
+          fetchDiffRef
+            .current(
+              workingDirectory,
+              comparisonBranchRef.current,
+              useMergeBaseRef.current,
+              workspaceId
+            )
+            .catch(() => {});
         }
       }
     );

@@ -325,8 +325,10 @@ function PeerChanges({ peer }: { peer: Workspace }) {
   // SSH peer is on the host this workspace is on, which is connected while its panel shows.
   useEffect(() => {
     const fileLists = useFileListStore.getState();
-    if (remote) void fileLists.fetchDiffIfNeeded(peer.workingDirectory, undefined, false, peer.id);
-    else void fileLists.fetchFileStatusesIfNeeded(peer.workingDirectory);
+    // A diff that failed to load keeps the last one, and the next look loads it again.
+    if (remote) {
+      fileLists.fetchDiffIfNeeded(peer.workingDirectory, undefined, false, peer.id).catch(() => {});
+    } else void fileLists.fetchFileStatusesIfNeeded(peer.workingDirectory);
   }, [peer.workingDirectory, peer.id, remote]);
 
   // A first load starts out empty, which isn't "No changes" yet.

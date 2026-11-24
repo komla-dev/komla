@@ -580,11 +580,18 @@ export const useFileListStore = create<FileListState>((set, get) => ({
       return data;
     } catch (error) {
       console.error('Failed to fetch diff:', error);
+      // Keep showing the last diff, as when its SSH host was busy, and fetch it again next time,
+      // unless a newer fetch already answered.
+      const superseded = diffRequests.get(cacheKey) !== request;
       set((state) => {
         const newCache = new Map(state.diffCache);
         const existing = newCache.get(cacheKey);
         if (existing) {
-          newCache.set(cacheKey, { ...existing, isLoading: false });
+          newCache.set(cacheKey, {
+            ...existing,
+            isLoading: false,
+            hasFullDiff: superseded && existing.hasFullDiff,
+          });
         }
         return { diffCache: newCache };
       });

@@ -18,6 +18,7 @@ import { useToastStore } from '../../../../src/renderer/stores/toast.store';
 import { useWorkspaceObservationStore } from '../../../../src/renderer/stores/workspace-observation.store';
 import { useWorkspacesStore } from '../../../../src/renderer/stores/workspaces.store';
 import { createProject, createTerminal, createWorkspace } from '../../../factories';
+import { recordUnhandledRejections, settleRejections } from '../../../helpers/unhandled-rejections';
 
 const workspace = createWorkspace({
   id: 'ssh-workspace',
@@ -230,6 +231,22 @@ describe('GitStatusIndicator SSH actions', () => {
       );
       expect(window.api.getWorkspaceDiff).toHaveBeenCalledWith(workspace.id);
     });
+  });
+
+  it("leaves a diff summary that couldn't get an SSH command slot to the next look", async () => {
+    const unhandled = recordUnhandledRejections();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(window.api.getWorkspaceDiff).mockRejectedValue(
+      new Error(
+        'Timed out waiting for an SSH command slot. The command was not started; try again.'
+      )
+    );
+
+    renderIndicator();
+
+    await waitFor(() => expect(window.api.getWorkspaceDiff).toHaveBeenCalledWith(workspace.id));
+    await settleRejections();
+    expect(unhandled).toEqual([]);
   });
 
   it('loads the remote diff summary and routes rebase by workspace id', async () => {
@@ -481,9 +498,7 @@ describe('GitStatusIndicator SSH actions', () => {
 
     fireEvent.focus(screen.getByText('↑3'));
 
-    expect(
-      (await screen.findAllByText(/Update from main first \(↓2\)/)).length
-    ).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/Update from main first \(↓2\)/)).length).toBeGreaterThan(0);
   });
 
   it('says the merge shortcut fast-forwards the target', async () => {

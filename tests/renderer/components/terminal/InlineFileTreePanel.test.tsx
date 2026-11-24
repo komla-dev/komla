@@ -111,6 +111,7 @@ import { useFileViewerStore } from '../../../../src/renderer/stores/file-viewer.
 import { useToastStore } from '../../../../src/renderer/stores/toast.store';
 import { useWorkspacesStore } from '../../../../src/renderer/stores/workspaces.store';
 import { createSshWorkspace, createWorkspace } from '../../../factories';
+import { recordUnhandledRejections, settleRejections } from '../../../helpers/unhandled-rejections';
 
 const emptyDiff = {
   files: [],
@@ -250,6 +251,52 @@ describe('InlineFileTreePanel', () => {
       'data-visible',
       'false'
     );
+  });
+
+  it('keeps the last SSH diff when a refresh fails, and leaves it to the next one', async () => {
+    const unhandled = recordUnhandledRejections();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sshWorkspace = createSshWorkspace({ id: 'ws-1', workingDirectory: 'ssh://dev/repo' });
+    useWorkspacesStore.setState({ workspaces: [sshWorkspace], selectedWorkspaceId: 'ws-1' });
+    useFileListStore.setState({ diffCache: new Map() });
+    const lastDiff = {
+      files: [{ path: 'src/a.ts', status: 'modified' as const, additions: 1, deletions: 0 }],
+      summary: { additions: 1, deletions: 0, filesChanged: 1 },
+    };
+    let reportChange: ((workspaceId: string) => void) | undefined;
+    window.api.onWorktreeChanged = vi.fn((listener: (workspaceId: string) => void) => {
+      reportChange = listener;
+      return vi.fn();
+    });
+    // Not a vi.fn: vitest handles the promises its mocks return, to record how they settled.
+    const answers: Array<() => Promise<unknown>> = [
+      async () => lastDiff,
+      () =>
+        Promise.reject(
+          new Error(
+            'Timed out waiting for an SSH command slot. The command was not started; try again.'
+          )
+        ),
+    ];
+    let diffCalls = 0;
+    window.api.getWorkspaceDiff = () => answers[Math.min(diffCalls++, answers.length - 1)]();
+    const cached = () => useFileListStore.getState().getDiff('ssh://dev/repo', null, false, 'ws-1');
+
+    render(
+      <InlineFileTreePanel
+        workspaceId="ws-1"
+        workingDirectory="ssh://dev/repo"
+        isGitWorkspace
+        isActive
+      />
+    );
+    await waitFor(() => expect(cached()?.data).toBe(lastDiff));
+
+    act(() => reportChange?.('ws-1'));
+    await waitFor(() => expect(diffCalls).toBe(2));
+    await waitFor(() => expect(cached()).toMatchObject({ data: lastDiff, isLoading: false }));
+    await settleRejections();
+    expect(unhandled).toEqual([]);
   });
 
   it('defers remote file data until terminal reconnection finishes', async () => {

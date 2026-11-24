@@ -190,7 +190,8 @@ export function GitStatusIndicator({
       targetStatusScope
     );
     if (sshBackend) {
-      void fetchDiffIfNeeded(workingDirectory, undefined, false, workspaceId);
+      // A summary that failed to load keeps the last one, and the next look loads it again.
+      fetchDiffIfNeeded(workingDirectory, undefined, false, workspaceId).catch(() => {});
     } else {
       void fetchFileStatusesIfNeeded(workingDirectory);
     }

@@ -488,6 +488,56 @@ describe('file-list.store', () => {
     await expect(running).rejects.toThrow('host offline');
   });
 
+  it('keeps the last diff when a refresh fails, and fetches it again the next time', async () => {
+    const dirPath = '/repo';
+    const lastDiff = {
+      files: [{ path: 'a.ts', status: 'modified', additions: 1, deletions: 0 }],
+      summary: { additions: 1, deletions: 0, filesChanged: 1 },
+    };
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    globalThis.window.api.getDiff
+      .mockResolvedValueOnce(lastDiff)
+      .mockRejectedValueOnce(
+        new Error(
+          'Timed out waiting for an SSH command slot. The command was not started; try again.'
+        )
+      )
+      .mockResolvedValueOnce(lastDiff);
+
+    await useFileListStore.getState().fetchDiff(dirPath);
+    await expect(useFileListStore.getState().fetchDiff(dirPath)).rejects.toThrow('command slot');
+    expect(useFileListStore.getState().getDiff(dirPath)).toMatchObject({
+      data: lastDiff,
+      isLoading: false,
+    });
+
+    await expect(useFileListStore.getState().fetchDiffIfNeeded(dirPath)).resolves.toEqual(lastDiff);
+    expect(globalThis.window.api.getDiff).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps a newer diff fresh when an older fetch fails after it', async () => {
+    const dirPath = '/repo';
+    const freshDiff = {
+      files: [{ path: 'a.ts', status: 'modified', additions: 1, deletions: 0 }],
+      summary: { additions: 1, deletions: 0, filesChanged: 1 },
+    };
+    const older = createDeferred<unknown>();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    globalThis.window.api.getDiff
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(freshDiff);
+
+    const olderFetch = useFileListStore.getState().fetchDiff(dirPath);
+    await useFileListStore.getState().fetchDiff(dirPath);
+    older.reject(new Error('Timed out waiting for an SSH command slot.'));
+    await expect(olderFetch).rejects.toThrow('command slot');
+
+    expect(useFileListStore.getState().getDiff(dirPath)).toMatchObject({
+      data: freshDiff,
+      hasFullDiff: true,
+    });
+  });
+
   it('refreshes both workspace and directory diff cache entries', async () => {
     const dirPath = 'ssh://dev/repo';
     const workspaceId = 'ssh-workspace';
