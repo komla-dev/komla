@@ -99,6 +99,7 @@ export type {
   Project,
   FolderTrustAgent,
   FolderProjectMatch,
+  ProjectFolders,
   ProjectIconCandidate,
   ProjectIconSource,
   LeftoverBranch,

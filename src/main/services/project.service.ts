@@ -6,6 +6,7 @@ import { BrowserWindow } from 'electron';
 
 import { IPC } from '../../shared/constants/ipc-channels';
 import { getNextAvailableColor } from '../../shared/lib/project-colors';
+import { projectFolderPath } from '../../shared/lib/project-repo-path';
 import {
   SETUP_DESTINATIONS,
   SETUP_STEP_KINDS,
@@ -24,6 +25,7 @@ import { FileWatcher } from './file-watcher';
 import { gitService, GitProgressCallback } from './git.service';
 import { managedRepoService } from './managed-repo.service';
 import { getKomlaBasePath } from './paths';
+import { projectWorktreesFolder } from './worktree-folders';
 
 import type {
   SetupStepPlacement,
@@ -32,6 +34,7 @@ import type {
   Project,
   FolderTrustAgent,
   FolderProjectMatch,
+  ProjectFolders,
   CreateProjectParams,
   CreateProjectFromRemoteParams,
   CreateProjectFromNewParams,
@@ -578,6 +581,17 @@ class ProjectService {
 
   get(id: string | null): Project | undefined {
     return id === null ? undefined : this.projects.get(id);
+  }
+
+  /** Where a Git project's files are, or null for a folder project, which is its folder. */
+  getFolders(id: string): ProjectFolders | null {
+    const project = this.projects.get(id);
+    if (!project || project.kind === 'directory') return null;
+    const worktrees = projectWorktreesFolder(project.name);
+    return {
+      repository: projectFolderPath(project),
+      worktrees: { path: worktrees, exists: existsSync(worktrees) },
+    };
   }
 
   list(): Project[] {

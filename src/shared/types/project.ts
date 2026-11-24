@@ -163,6 +163,20 @@ export interface FolderProjectMatch {
   repoRoot: string | null;
 }
 
+/** Where a Git project's files are on this computer, for its settings to show. */
+export interface ProjectFolders {
+  /**
+   * The repository workspaces' worktrees come from: the folder of Komla's clone for a managed
+   * project. Never the folder it was added from, which may be gone.
+   */
+  repository: string;
+  /**
+   * Where new workspaces' worktrees go, named after the project as it is now called. It doesn't
+   * exist until the first workspace under this name.
+   */
+  worktrees: { path: string; exists: boolean };
+}
+
 /** An image in a project's files that could be its icon. */
 export interface ProjectIconCandidate {
   /** Where it was found, relative to the folder scanned, with forward slashes. */

@@ -719,6 +719,7 @@ export const projectFindIconsArgsSchema = z.tuple([
   ]),
 ]);
 export const projectTakeIconPromptArgsSchema = z.tuple([idSchema]);
+export const projectGetFoldersArgsSchema = z.tuple([idSchema]);
 // Then the SSH host whose clone to fetch too, or null for just this computer's, and whether this
 // computer's repository fetches every branch rather than just the ones Komla uses.
 export const projectFetchInBackgroundArgsSchema = z.tuple([

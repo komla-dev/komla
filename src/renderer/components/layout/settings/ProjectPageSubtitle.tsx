@@ -3,12 +3,14 @@ import { ArrowSquareOut } from '@phosphor-icons/react';
 import { useProjectWebUrl, webUrlLabel } from '@/hooks/useProjectWebUrl';
 import { cn } from '@/lib/utils';
 
+import { projectFolderPath } from '../../../../shared/lib/project-repo-path';
+
 import type { Project } from '@/types';
 
 /**
  * The line under a project's name in Settings: its repository's web page when it has a remote,
- * since Komla works in its own clone of most repositories, and otherwise the folder it was added
- * from. Directory projects show their folder, which is the project.
+ * and otherwise its folder: Komla's own for a managed project, not the folder it was added from,
+ * which may be gone. Directory projects show their folder, which is the project.
  */
 export function ProjectPageSubtitle({ project }: { project: Project }) {
   const webUrl = useProjectWebUrl(project);
@@ -54,12 +56,13 @@ function ProjectFolder({
   pending: boolean;
   className?: string;
 }) {
+  const folder = projectFolderPath(project);
   return (
     <span
       className={cn('block truncate font-mono text-xs', pending && 'invisible', className)}
-      title={project.repositoryPath}
+      title={folder}
     >
-      {project.repositoryPath}
+      {folder}
     </span>
   );
 }

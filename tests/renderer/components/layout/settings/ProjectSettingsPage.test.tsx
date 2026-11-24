@@ -167,6 +167,7 @@ describe('ProjectSettingsPage', () => {
     useConfigStore.setState({ config: null });
     window.api = {
       findProjectIcons: vi.fn().mockResolvedValue([]),
+      getProjectFolders: vi.fn().mockResolvedValue(null),
       getMainBranch: vi.fn().mockResolvedValue('main'),
       getSecretFilesStatus: vi.fn().mockResolvedValue({ keychain: true, steps: {} }),
       setSecretFile: vi.fn().mockResolvedValue({ names: ['API_KEY'], storage: 'keychain' }),

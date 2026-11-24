@@ -126,6 +126,8 @@ const DEV_SERVER_PRESETS: SetupPreset[] = [
   },
 ];
 
+// The .env presets copy from an example path for the user to edit, not {{localProjectPath}}: the
+// folder a project was added from may be another tool's, or gone, and a project from a URL has none.
 const FILES_CONFIG_PRESETS: SetupPreset[] = [
   {
     label: 'Secret .env',
@@ -138,7 +140,7 @@ const FILES_CONFIG_PRESETS: SetupPreset[] = [
   {
     label: 'Copy .env',
     name: 'Copy .env',
-    command: 'cp "{{localProjectPath}}/.env" .env',
+    command: 'cp /path/to/.env .env',
     placement: 'background',
     destination: 'local-workspace-repository',
     trigger: 'workspace-creation',
@@ -153,7 +155,7 @@ const FILES_CONFIG_PRESETS: SetupPreset[] = [
   {
     label: 'Copy .env to local copy',
     name: 'Copy .env to local copy',
-    command: 'cp "{{localProjectPath}}/.env" .env',
+    command: 'cp /path/to/.env .env',
     placement: 'background',
     destination: 'ssh-local-copy',
     trigger: 'workspace-creation',
@@ -161,8 +163,7 @@ const FILES_CONFIG_PRESETS: SetupPreset[] = [
   {
     label: 'Upload .env to SSH',
     name: 'Upload .env to SSH workspace',
-    command:
-      'scp -P {{sshPort}} "{{localProjectPath}}/.env" "{{sshTarget}}:{{workspacePath}}/.env"',
+    command: 'scp -P {{sshPort}} /path/to/.env "{{sshTarget}}:{{workspacePath}}/.env"',
     placement: 'background',
     destination: 'ssh-local-copy',
     trigger: 'workspace-creation',
@@ -588,6 +589,7 @@ export function WorkspaceSetupSection({
                           <div className="order-4">
                             <SetupVariableExamples
                               destination={s.destination ?? 'workspace-repository'}
+                              command={s.command}
                             />
                           </div>
                         )}
@@ -1189,10 +1191,19 @@ function StepWarning({ children }: { children: React.ReactNode }) {
   );
 }
 
-function SetupVariableExamples({ destination }: { destination: SetupDestination }) {
+function SetupVariableExamples({
+  destination,
+  command,
+}: {
+  destination: SetupDestination;
+  command: string;
+}) {
   const destinationDiffersFromWorkspace = destination === 'ssh-local-copy';
+  // Still filled in for the steps that use it, but no longer offered: the folder a project was
+  // added from may be another tool's, or gone, and a Secret file covers what it was for.
   const showLocalProjectPath =
-    destination === 'local-workspace-repository' || destination === 'ssh-local-copy';
+    (destination === 'local-workspace-repository' || destination === 'ssh-local-copy') &&
+    command.includes('{{localProjectPath}}');
   const appliesToSsh =
     destination === 'workspace-repository' ||
     destination === 'ssh-workspace-repository' ||
@@ -1218,7 +1229,7 @@ function SetupVariableExamples({ destination }: { destination: SetupDestination 
         {showLocalProjectPath && (
           <VariableExample
             name="localProjectPath"
-            description="The original project folder on this computer"
+            description="The folder this project was added from"
             example="/Users/alex/code/acme"
           />
         )}

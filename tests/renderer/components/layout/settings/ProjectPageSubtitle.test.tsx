@@ -43,12 +43,25 @@ describe('ProjectPageSubtitle', () => {
     expect(openExternal).toHaveBeenCalledWith('https://github.com/me/komla');
   });
 
-  it('shows the folder for a repository without a remote', async () => {
+  // The folder it was added from may belong to another tool, or be gone.
+  it("shows Komla's folder for a repository without a remote, not the one it was added from", async () => {
     getRepoWebInfo.mockResolvedValue({ webUrl: null });
     render(<ProjectPageSubtitle project={project} />);
 
-    expect(await screen.findByText('/Users/me/projects/komla')).toBeVisible();
+    expect(await screen.findByText('/Users/me/.komla/repos/komla')).toBeVisible();
+    expect(screen.queryByText('/Users/me/projects/komla')).not.toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('shows the folder of a Windows project Komla keeps', async () => {
+    getRepoWebInfo.mockResolvedValue({ webUrl: null });
+    render(
+      <ProjectPageSubtitle
+        project={{ ...project, managedRepoPath: 'C:\\Users\\me\\.komla\\repos\\komla\\.git' }}
+      />
+    );
+
+    expect(await screen.findByText('C:\\Users\\me\\.komla\\repos\\komla')).toBeVisible();
   });
 
   it('shows the folder of a directory project without asking for a remote', () => {

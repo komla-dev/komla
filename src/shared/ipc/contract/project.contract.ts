@@ -16,6 +16,7 @@ import {
   projectCreateFromNewArgsSchema,
   projectFindIconsArgsSchema,
   projectTakeIconPromptArgsSchema,
+  projectGetFoldersArgsSchema,
   projectFetchInBackgroundArgsSchema,
   projectListLeftoverBranchesArgsSchema,
   projectDeleteLeftoverBranchesArgsSchema,
@@ -44,6 +45,7 @@ import type {
   FolderProjectMatch,
   LeftoverBranches,
   Project,
+  ProjectFolders,
   ProjectIconCandidate,
   SecretFileStatus,
   SecretFilesStatus,
@@ -84,6 +86,7 @@ export const projectContract = {
     SshHostProjectImportResult[]
   >(),
   [IPC.PROJECT_CREATE_FROM_NEW]: invoke(projectCreateFromNewArgsSchema).returns<Project>(),
+  [IPC.PROJECT_GET_FOLDERS]: invoke(projectGetFoldersArgsSchema).returns<ProjectFolders | null>(),
   [IPC.PROJECT_FIND_ICONS]: invoke(projectFindIconsArgsSchema).returns<ProjectIconCandidate[]>(),
   [IPC.PROJECT_TAKE_ICON_PROMPT]: invoke(projectTakeIconPromptArgsSchema).returns<
     ProjectIconCandidate[]

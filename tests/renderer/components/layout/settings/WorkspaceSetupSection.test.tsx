@@ -576,7 +576,9 @@ describe('WorkspaceSetupSection', () => {
     ]);
   });
 
-  it('quick-adds an SSH workspace upload from the local project folder', async () => {
+  // An example path to edit, not {{localProjectPath}}: the folder a project was added from may
+  // be another tool's, or gone, and a project from a URL has none.
+  it('quick-adds an SSH workspace upload of a .env the user points it at', async () => {
     const onStepsChange = renderSection();
 
     await userEvent.click(screen.getByRole('button', { name: 'Upload .env to SSH' }));
@@ -584,8 +586,7 @@ describe('WorkspaceSetupSection', () => {
     expect(onStepsChange).toHaveBeenCalledWith([
       expect.objectContaining({
         name: 'Upload .env to SSH workspace',
-        command:
-          'scp -P {{sshPort}} "{{localProjectPath}}/.env" "{{sshTarget}}:{{workspacePath}}/.env"',
+        command: 'scp -P {{sshPort}} /path/to/.env "{{sshTarget}}:{{workspacePath}}/.env"',
         placement: 'background',
         destination: 'ssh-local-copy',
         trigger: 'workspace-creation',
@@ -593,28 +594,28 @@ describe('WorkspaceSetupSection', () => {
     ]);
   });
 
-  it('quick-adds a .env copy from the local project folder into local workspaces', async () => {
+  it('quick-adds a .env copy into local workspaces from a path the user edits', async () => {
     const onStepsChange = renderSection();
 
     await userEvent.click(screen.getByRole('button', { name: 'Copy .env' }));
 
     expect(onStepsChange).toHaveBeenCalledWith([
       expect.objectContaining({
-        command: 'cp "{{localProjectPath}}/.env" .env',
+        command: 'cp /path/to/.env .env',
         destination: 'local-workspace-repository',
         trigger: 'workspace-creation',
       }),
     ]);
   });
 
-  it('quick-adds a .env copy from the local project folder into the local copy', async () => {
+  it('quick-adds a .env copy into the local copy from a path the user edits', async () => {
     const onStepsChange = renderSection();
 
     await userEvent.click(screen.getByRole('button', { name: 'Copy .env to local copy' }));
 
     expect(onStepsChange).toHaveBeenCalledWith([
       expect.objectContaining({
-        command: 'cp "{{localProjectPath}}/.env" .env',
+        command: 'cp /path/to/.env .env',
         destination: 'ssh-local-copy',
       }),
     ]);
@@ -768,13 +769,30 @@ describe('WorkspaceSetupSection', () => {
     expect(screen.getByText(/Where this command runs/)).toBeInTheDocument();
     expect(screen.getByText('{{workspacePath}}')).toBeInTheDocument();
     expect(screen.getByText(/The workspace on the SSH host/)).toBeInTheDocument();
-    expect(screen.getByText('{{localProjectPath}}')).toBeInTheDocument();
-    expect(screen.getByText(/The original project folder on this computer/)).toBeInTheDocument();
+    expect(screen.queryByText('{{localProjectPath}}')).not.toBeInTheDocument();
     expect(screen.getByText('{{sshTarget}}')).toBeInTheDocument();
     expect(screen.getByText(/user@host/)).toBeInTheDocument();
     expect(screen.getByText('{{sshPort}}')).toBeInTheDocument();
     expect(screen.queryByText('{{remoteWorkspacePath}}')).not.toBeInTheDocument();
     expect(screen.queryByText('{{projectName}}')).not.toBeInTheDocument();
+  });
+
+  it('explains {{localProjectPath}} only to a step that already uses it', async () => {
+    renderSection([
+      {
+        id: 'setup-step',
+        name: 'Copy .env',
+        command: 'cp "{{localProjectPath}}/.env" .env',
+        placement: 'background',
+        destination: 'local-workspace-repository',
+        trigger: 'workspace-creation',
+      },
+    ]);
+
+    await userEvent.click(screen.getByText('Variables available for this destination'));
+
+    expect(screen.getByText('{{localProjectPath}}')).toBeInTheDocument();
+    expect(screen.getByText(/The folder this project was added from/)).toBeInTheDocument();
   });
 
   it('does not advertise desktop-only paths for the generic workspace destination', async () => {

@@ -16,7 +16,7 @@ export const PROJECT_SECTIONS: ReadonlyArray<{
     value: 'general',
     label: 'General',
     icon: SlidersHorizontal,
-    cards: ['General', 'SSH workspaces', 'Danger zone'],
+    cards: ['General', 'Folders', 'SSH workspaces', 'Danger zone'],
   },
   { value: 'git', label: 'Git', icon: GitBranch, cards: ['Branches', 'Commit buttons'] },
   {

@@ -1,16 +1,13 @@
 import { join, sep } from 'path';
 
 import { resolveBranchPrefix } from '../../../shared/lib/project-git-defaults';
-import {
-  generateBranchSuffix,
-  sanitizeWorktreeProjectSegment,
-} from '../../../shared/lib/random-names';
+import { generateBranchSuffix } from '../../../shared/lib/random-names';
 import { normalizeSshTargetBranch } from '../../../shared/lib/ssh-target-branch';
 import { createLogger } from '../../lib/logger';
 import { configService } from '../config.service';
 import { gitService } from '../git.service';
-import { getKomlaBasePath } from '../paths';
 import { projectService } from '../project.service';
+import { projectWorktreesFolder, worktreesBasePath } from '../worktree-folders';
 
 import { workspaceStore } from './store';
 
@@ -114,11 +111,10 @@ export function toSafeWorktreePath(projectName: string, branchName: string): str
     s.replaceAll('\u0000', '').replace(/\.\./g, '--').replace(/[/\\]/g, '-').replace(/^\./, '_') ||
     fallback;
 
-  const safeProject = sanitizeWorktreeProjectSegment(projectName);
   const safeBranch = sanitizeBranch(branchName, 'branch');
 
-  const base = join(getKomlaBasePath(), 'worktrees');
-  const target = join(base, safeProject, safeBranch);
+  const base = worktreesBasePath();
+  const target = join(projectWorktreesFolder(projectName), safeBranch);
 
   // Defense in depth: ensure the resolved path stays within the worktrees directory
   if (target !== base && !target.startsWith(base + sep)) {

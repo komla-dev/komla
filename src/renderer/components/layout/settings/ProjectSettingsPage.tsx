@@ -41,6 +41,7 @@ import {
   secretFileChanges,
   type ProjectDraft,
 } from './project-settings-draft';
+import { ProjectFoldersCard } from './ProjectFoldersCard';
 import { ProjectSetupSkillButton } from './ProjectSetupSkillButton';
 import { SettingsCard } from './SettingsCard';
 import { SettingsRow } from './SettingsRow';
@@ -356,6 +357,7 @@ export function ProjectSettingsPage({
         <>
           <div hidden={section !== 'general'} className="space-y-8">
             {generalCard}
+            <ProjectFoldersCard project={project} />
             {(hasSshHosts ||
               saved.sshWorkspaceMode !== 'inherit' ||
               saved.keepSshSettingsInSync) && (

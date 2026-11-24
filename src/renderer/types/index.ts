@@ -108,6 +108,7 @@ export type {
   SetupStep,
   Project,
   FolderProjectMatch,
+  ProjectFolders,
   ProjectIconCandidate,
   ProjectIconSource,
   CreateProjectParams,

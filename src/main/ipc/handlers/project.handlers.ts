@@ -36,6 +36,7 @@ import type {
   BranchDeletionResult,
   FolderProjectMatch,
   LeftoverBranches,
+  ProjectFolders,
   ProjectIconCandidate,
   ProjectIconSource,
   SecretFileStatus,
@@ -248,6 +249,10 @@ export function registerProjectHandlers(): void {
   handleIpc(IPC.PROJECT_CREATE_FROM_NEW, async (_, [params]): Promise<Project> => {
     return projectService.createFromNew(params);
   });
+
+  handleIpc(IPC.PROJECT_GET_FOLDERS, async (_, [id]): Promise<ProjectFolders | null> =>
+    projectService.getFolders(id)
+  );
 
   handleIpc(IPC.PROJECT_FIND_ICONS, async (_, [source]): Promise<ProjectIconCandidate[]> =>
     findIcons(source)

@@ -1,4 +1,4 @@
-import { join, resolve } from 'path';
+import { dirname, join, resolve } from 'path';
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -1467,5 +1467,50 @@ describe('ProjectService', () => {
         }
       }
     );
+  });
+
+  describe('folders of a managed project', () => {
+    const clone = dirname('/mock/home/.komla/repos/akm/.git');
+    const worktrees = join('/mock/home/.komla', 'worktrees', 'AiKM');
+
+    async function addedFromSource() {
+      const { projectService } = await import('../../../src/main/services/project.service');
+      mockGitService.getRepoName.mockResolvedValue('akm');
+      vfs.mock.mkdirSync('/old-tool/akm', { recursive: true });
+      const project = await projectService.create({ repositoryPath: '/old-tool/akm' });
+      // Renamed after adding, so its worktrees are named differently from its clone.
+      await projectService.update(project.id, { name: 'AiKM' });
+      return { projectService, project };
+    }
+
+    it("lists Komla's clone and the worktrees folder, not the folder it was added from", async () => {
+      const { projectService, project } = await addedFromSource();
+
+      expect(projectService.getFolders(project.id)).toEqual({
+        repository: clone,
+        worktrees: { path: worktrees, exists: false },
+      });
+      // Still kept, for the Setup steps that copy from it.
+      expect(projectService.get(project.id)?.repositoryPath).toBe('/old-tool/akm');
+    });
+
+    it('reports the worktrees folder once a workspace made it', async () => {
+      const { projectService, project } = await addedFromSource();
+      vfs.mock.mkdirSync(worktrees, { recursive: true });
+
+      expect(projectService.getFolders(project.id)?.worktrees).toEqual({
+        path: worktrees,
+        exists: true,
+      });
+    });
+
+    it('has none for a folder project, which is its folder', async () => {
+      const { projectService } = await import('../../../src/main/services/project.service');
+      mockGitService.isGitRepo.mockResolvedValue(false);
+      vfs.mock.mkdirSync('/notes', { recursive: true });
+      const project = await projectService.create({ repositoryPath: '/notes' });
+
+      expect(projectService.getFolders(project.id)).toBeNull();
+    });
   });
 });

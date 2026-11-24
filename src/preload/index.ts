@@ -24,6 +24,7 @@ import type {
   FileDiffContent,
   Project,
   FolderProjectMatch,
+  ProjectFolders,
   ProjectIconCandidate,
   ProjectIconSource,
   CreateProjectParams,
@@ -527,6 +528,9 @@ const api = {
     imports: SshHostProjectImport[]
   ): Promise<SshHostProjectImportResult[]> =>
     ipcRenderer.invoke(IPC.PROJECT_IMPORT_FROM_SSH_HOST, hostId, imports),
+
+  getProjectFolders: (id: string): Promise<ProjectFolders | null> =>
+    ipcRenderer.invoke(IPC.PROJECT_GET_FOLDERS, id),
 
   findProjectIcons: (source: ProjectIconSource): Promise<ProjectIconCandidate[]> =>
     ipcRenderer.invoke(IPC.PROJECT_FIND_ICONS, source),

@@ -274,6 +274,9 @@ const PROJECT_SEARCH_INDEX: readonly ProjectSearchEntry[] = [
     keywords: 'prune clean up old stale unused workspaces',
   },
   ...gitOnly([
+    // Its first row's label depends on how the project was added, so it isn't a result.
+    card('Folders', 'path paths clone repository worktrees location show in folder'),
+    ...rows('Folders', 'Worktrees'),
     card('Branches', 'prune clean up delete old branches'),
     ...rows('Branches', 'Branch prefix', 'Target branch', 'Leftover branches'),
     card('Setup steps', 'workspace setup order commands terminals'),

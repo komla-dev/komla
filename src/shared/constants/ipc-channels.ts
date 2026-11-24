@@ -258,6 +258,7 @@ export const IPC = {
   PROJECT_GET_SETTINGS_PATH: 'project:get-settings-path',
   PROJECT_CREATE_FROM_REMOTE: 'project:create-from-remote',
   PROJECT_CREATE_FROM_NEW: 'project:create-from-new',
+  PROJECT_GET_FOLDERS: 'project:get-folders',
   PROJECT_FIND_ICONS: 'project:find-icons',
   PROJECT_TAKE_ICON_PROMPT: 'project:take-icon-prompt',
   PROJECT_CHOOSE_ICON_FILE: 'project:choose-icon-file',
