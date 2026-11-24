@@ -28,7 +28,8 @@ const announcedSetupRunIds = new Set<string>();
 
 function announceProblems(
   runs: SetupActivityRun[],
-  workspace: Pick<Workspace, 'id' | 'name'>
+  workspace: Pick<Workspace, 'id' | 'name'>,
+  openOutput: (runId: string) => void
 ): void {
   const problemsBySetupRun = new Map<string, SetupActivityRun[]>();
   for (const run of runs) {
@@ -41,8 +42,11 @@ function announceProblems(
   for (const [setupRunId, problems] of problemsBySetupRun) {
     if (announcedSetupRunIds.has(setupRunId)) continue;
     announcedSetupRunIds.add(setupRunId);
-    const failed = problems.some((run) => run.state === 'failed');
+    const failedRun = problems.find((run) => run.state === 'failed');
+    const failed = Boolean(failedRun);
     const names = problems.map((run) => run.stepName).join(', ');
+    // Opens the output of the first step that failed, where its error is.
+    const shownRun = failedRun ?? problems[0];
     useToastStore
       .getState()
       .addToast(
@@ -52,8 +56,11 @@ function announceProblems(
         failed ? 'error' : 'info',
         {
           action: {
-            label: 'View',
-            onClick: () => void useWorkspacesStore.getState().selectWorkspace(workspace.id),
+            label: 'View output',
+            onClick: () => {
+              void useWorkspacesStore.getState().selectWorkspace(workspace.id);
+              openOutput(shownRun.id);
+            },
           },
           dismissOnTimeout: false,
         }
@@ -68,8 +75,16 @@ export function SetupActivityNotifications({
   runs: SetupActivityRun[];
   workspace: Pick<Workspace, 'id' | 'name'>;
 }) {
-  React.useEffect(() => announceProblems(runs, workspace), [runs, workspace]);
-  return null;
+  const [viewedRunId, setViewedRunId] = React.useState<string>();
+  React.useEffect(() => announceProblems(runs, workspace, setViewedRunId), [runs, workspace]);
+  const viewedRun = runs.find((run) => run.id === viewedRunId);
+  return viewedRun ? (
+    <RunOutputDialog
+      run={viewedRun}
+      onClose={() => setViewedRunId(undefined)}
+      onCloseAutoFocus={() => {}}
+    />
+  ) : null;
 }
 
 export function SetupActivityNotificationCenter() {

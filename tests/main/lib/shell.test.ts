@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+import { pinPlatform } from '../../helpers/platform';
+
 const mockExistsSync = vi.fn();
 const mockExecFileSync = vi.fn();
+const mockExecFile = vi.fn();
 
 vi.mock('fs', () => ({
   existsSync: (path: string) => mockExistsSync(path),
@@ -9,6 +12,7 @@ vi.mock('fs', () => ({
 
 vi.mock('child_process', () => ({
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+  execFile: (...args: unknown[]) => mockExecFile(...args),
 }));
 
 vi.mock('../../../src/main/lib/wsl', () => ({
@@ -140,6 +144,94 @@ describe('shell', () => {
       } finally {
         Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
         process.env.SHELL = originalShell;
+      }
+    });
+  });
+
+  describe('the Windows shell', () => {
+    const pwshPath = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe';
+    const whereFinds = (output: string | null) => {
+      mockExistsSync.mockImplementation((path: string) => path === pwshPath);
+      mockExecFileSync.mockImplementation(() => {
+        if (output === null) throw new Error('not found');
+        return Buffer.from(output);
+      });
+      mockExecFile.mockImplementation(
+        (
+          _file: string,
+          _args: string[],
+          _options: unknown,
+          callback: (error: Error | null, stdout: string) => void
+        ) => (output === null ? callback(new Error('not found'), '') : callback(null, output))
+      );
+    };
+
+    beforeEach(() => pinPlatform('win32'));
+
+    it('is pwsh when where.exe finds it, and Windows PowerShell otherwise', async () => {
+      whereFinds(`${pwshPath}\r\nC:\\other\\pwsh.exe\r\n`);
+      expect((await import('../../../src/main/lib/shell')).getShell()).toBe(pwshPath);
+
+      vi.resetModules();
+      whereFinds(null);
+      expect((await import('../../../src/main/lib/shell')).getShell()).toBe('powershell.exe');
+    });
+
+    it('names PowerShell 7 without blocking the main process', async () => {
+      whereFinds(`${pwshPath}\r\n`);
+      const { describeCommandShell } = await import('../../../src/main/lib/shell');
+
+      await expect(describeCommandShell()).resolves.toEqual({
+        kind: 'powershell',
+        name: 'PowerShell 7',
+      });
+      expect(mockExecFileSync).not.toHaveBeenCalled();
+    });
+
+    it('names Windows PowerShell 5.1 when pwsh is not installed', async () => {
+      whereFinds(null);
+      const { describeCommandShell } = await import('../../../src/main/lib/shell');
+
+      await expect(describeCommandShell()).resolves.toEqual({
+        kind: 'windows-powershell',
+        name: 'Windows PowerShell 5.1',
+      });
+    });
+
+    it('keeps the answer for getShell, which then runs no lookup of its own', async () => {
+      whereFinds(`${pwshPath}\r\n`);
+      const { describeCommandShell, getShell } = await import('../../../src/main/lib/shell');
+
+      await describeCommandShell();
+      expect(getShell()).toBe(pwshPath);
+      expect(mockExecFileSync).not.toHaveBeenCalled();
+    });
+
+    it('names WSL and its distro in WSL mode', async () => {
+      const wsl = await import('../../../src/main/lib/wsl');
+      vi.mocked(wsl.isWslMode).mockReturnValue(true);
+      const { describeCommandShell } = await import('../../../src/main/lib/shell');
+
+      await expect(describeCommandShell('Ubuntu')).resolves.toEqual({
+        kind: 'wsl',
+        name: 'WSL (Ubuntu)',
+      });
+      await expect(describeCommandShell()).resolves.toEqual({ kind: 'wsl', name: 'WSL' });
+      vi.mocked(wsl.isWslMode).mockReturnValue(false);
+    });
+  });
+
+  describe('describeCommandShell on macOS and Linux', () => {
+    it("names the user's shell", async () => {
+      pinPlatform('darwin');
+      const originalShell = process.env.SHELL;
+      process.env.SHELL = '/bin/zsh';
+      try {
+        const { describeCommandShell } = await import('../../../src/main/lib/shell');
+        await expect(describeCommandShell()).resolves.toEqual({ kind: 'posix', name: 'zsh' });
+      } finally {
+        if (originalShell === undefined) delete process.env.SHELL;
+        else process.env.SHELL = originalShell;
       }
     });
   });

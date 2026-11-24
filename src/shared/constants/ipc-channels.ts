@@ -388,6 +388,7 @@ export const IPC = {
   SHELL_GET_AVAILABLE_EDITORS: 'shell:get-available-editors',
   SHELL_OPEN_IN_EDITOR: 'shell:open-in-editor',
   SHELL_GET_WSL_DISTROS: 'shell:get-wsl-distros',
+  SHELL_GET_COMMAND_SHELL: 'shell:get-command-shell',
 
   // Window
   WINDOW_CREATE: 'window:create',

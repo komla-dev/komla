@@ -17,6 +17,12 @@ vi.mock('../../../../src/main/lib/wsl', () => ({
   detectWslDistros: vi.fn(() => []),
 }));
 
+vi.mock('../../../../src/main/lib/shell', () => ({ describeCommandShell: vi.fn() }));
+
+vi.mock('../../../../src/main/services/config.service', () => ({
+  configService: { get: () => ({}) },
+}));
+
 vi.mock('../../../../src/main/lib/logger', () => ({
   createLogger: vi.fn(() => ({
     info: vi.fn(),

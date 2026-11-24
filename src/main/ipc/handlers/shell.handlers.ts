@@ -5,8 +5,12 @@ import { app, shell } from 'electron';
 
 import { IPC } from '../../../shared/constants/ipc-channels';
 import { findOnPath } from '../../lib/find-on-path';
+import { describeCommandShell } from '../../lib/shell';
 import { detectWslDistros } from '../../lib/wsl';
+import { configService } from '../../services/config.service';
 import { handleIpc } from '../validation/ipc-validators';
+
+import type { CommandShell } from '../../../shared/types';
 
 interface KnownEditor {
   id: string;
@@ -103,4 +107,8 @@ export function registerShellHandlers(): void {
   handleIpc(IPC.SHELL_GET_WSL_DISTROS, async (): Promise<string[]> => {
     return detectWslDistros();
   });
+
+  handleIpc(IPC.SHELL_GET_COMMAND_SHELL, (): Promise<CommandShell> =>
+    describeCommandShell(configService.get().wslDistro)
+  );
 }

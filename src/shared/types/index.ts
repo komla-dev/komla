@@ -10,6 +10,7 @@ export type {
   TerminalLaunchLocation,
   TerminalHostInfo,
   Terminal,
+  CommandShell,
 } from './terminal';
 export { isLocalTerminalExecutionLocation } from './terminal';
 export type { LocalCopySyncStatus } from './local-copy';

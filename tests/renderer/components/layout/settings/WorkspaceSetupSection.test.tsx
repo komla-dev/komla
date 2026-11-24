@@ -10,7 +10,17 @@ import { WorkspaceSetupSection } from '../../../../../src/renderer/components/la
 import { TooltipProvider } from '../../../../../src/renderer/components/ui/tooltip';
 import { useSshHostsStore } from '../../../../../src/renderer/stores/ssh-hosts.store';
 
-import type { SecretFileStatus, SetupStep, SshHost } from '../../../../../src/shared/types';
+import type {
+  CommandShell,
+  SecretFileStatus,
+  SetupStep,
+  SshHost,
+} from '../../../../../src/shared/types';
+
+const commandShell = vi.hoisted(() => ({
+  current: { kind: 'posix', name: 'zsh' } as CommandShell | undefined,
+}));
+vi.mock('@/hooks/useCommandShell', () => ({ useCommandShell: () => commandShell.current }));
 
 const sshHost: SshHost = {
   id: 'ssh-host',
@@ -127,6 +137,35 @@ describe('WorkspaceSetupSection', () => {
     Object.assign(window, { api: { platform: 'darwin' } });
     useSshHostsStore.setState(useSshHostsStore.getInitialState(), true);
     useSshHostsStore.setState({ hasLoaded: true, hosts: [sshHost] });
+  });
+
+  it('says which shell runs each command step, by where it runs', () => {
+    commandShell.current = { kind: 'powershell', name: 'PowerShell 7' };
+    const step = (id: string, overrides: Partial<SetupStep> = {}): SetupStep => ({
+      id,
+      name: id,
+      command: 'npm ci',
+      placement: 'background',
+      ...overrides,
+    });
+    renderSection([
+      step('Local', { destination: 'local-workspace-repository' }),
+      step('Remote', { destination: 'ssh-workspace-repository' }),
+      step('Either'),
+      step('Notes', { command: '', placement: 'split-right', kind: 'note' }),
+    ]);
+    commandShell.current = { kind: 'posix', name: 'zsh' };
+
+    const note = (name: string) =>
+      within(screen.getByRole('article', { name: `Setup step ${name}` })).queryByText(/^Runs in/);
+    expect(note('Local')).toHaveTextContent(
+      'Runs in PowerShell 7. In PowerShell, cp, mv and rm are cmdlets without their Unix options.'
+    );
+    expect(note('Remote')).toHaveTextContent("Runs in the SSH host's shell.");
+    expect(note('Either')).toHaveTextContent(
+      "Runs in PowerShell 7 on this computer, and in the SSH host's shell in SSH workspaces."
+    );
+    expect(note('Notes')).toBeNull();
   });
 
   it('explains when setup steps run', () => {

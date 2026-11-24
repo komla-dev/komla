@@ -24,6 +24,15 @@ vi.mock('../../../../src/main/lib/wsl', () => ({
   detectWslDistros: mockDetectWslDistros,
 }));
 
+const mockDescribeCommandShell = vi.fn();
+vi.mock('../../../../src/main/lib/shell', () => ({
+  describeCommandShell: mockDescribeCommandShell,
+}));
+
+vi.mock('../../../../src/main/services/config.service', () => ({
+  configService: { get: () => ({ wslDistro: 'Ubuntu' }) },
+}));
+
 vi.mock('../../../../src/main/lib/logger', () => ({
   createLogger: vi.fn(() => ({
     info: vi.fn(),
@@ -134,6 +143,18 @@ describe('shell IPC behavior', () => {
 
       expect(mockDetectWslDistros).toHaveBeenCalled();
       expect(result).toEqual(['Ubuntu', 'Debian']);
+    });
+  });
+
+  describe('shell:get-command-shell', () => {
+    it('names the shell for the configured WSL distro', async () => {
+      const ipcMain = await setup();
+      mockDescribeCommandShell.mockResolvedValue({ kind: 'wsl', name: 'WSL (Ubuntu)' });
+
+      const result = await ipcMain._invoke('shell:get-command-shell');
+
+      expect(mockDescribeCommandShell).toHaveBeenCalledWith('Ubuntu');
+      expect(result).toEqual({ kind: 'wsl', name: 'WSL (Ubuntu)' });
     });
   });
 });

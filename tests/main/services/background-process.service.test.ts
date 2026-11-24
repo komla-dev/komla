@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+import { powerShellCommandWithExitCode } from '../../../src/main/lib/powershell-native-arguments';
+
 // Mock IPty interface matching node-pty
 interface MockIPty {
   pid: number;
@@ -212,7 +214,7 @@ describe('BackgroundProcessService', () => {
       expect(spawnedPtys[0].write).toHaveBeenCalledWith('npm run dev; exit $?\r');
     });
 
-    it('runs PowerShell commands from arguments with a numeric success exit code', async () => {
+    it('runs PowerShell commands from arguments, exiting with how they went', async () => {
       mockGetShell.mockReturnValue('powershell.exe');
       const { backgroundProcessService } =
         await import('../../../src/main/services/background-process.service');
@@ -224,7 +226,7 @@ describe('BackgroundProcessService', () => {
         [
           '-l',
           '-Command',
-          '$global:LASTEXITCODE = $null; npm install; $komlaSetupSucceeded = $?; $komlaSetupExitCode = $LASTEXITCODE; if ($null -eq $komlaSetupExitCode) { $komlaSetupExitCode = if ($komlaSetupSucceeded) { 0 } else { 1 } }; exit $komlaSetupExitCode',
+          powerShellCommandWithExitCode('npm install'),
         ],
         expect.objectContaining({ cwd: 'C:\\repo' })
       );
@@ -245,9 +247,7 @@ describe('BackgroundProcessService', () => {
       spawnedPtys[0]._simulateData('PS C:\\repo> ');
       vi.advanceTimersByTime(150);
       expect(spawnedPtys[0].write).toHaveBeenCalledWith(
-        expect.stringMatching(
-          /^\$global:LASTEXITCODE = \$null; npm run build -- x+; .*exit \$komlaSetupExitCode\r$/
-        )
+        `${powerShellCommandWithExitCode(command)}\r`
       );
     });
 

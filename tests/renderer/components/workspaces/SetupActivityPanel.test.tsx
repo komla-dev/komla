@@ -440,6 +440,22 @@ describe('SetupActivityPanel', () => {
     expect(selectWorkspace).toHaveBeenCalledWith('ws-1');
   });
 
+  it("opens a failed step's output from its announcement", () => {
+    const workspace = workspaceWithFailure();
+    const runs = [{ ...workspace.setupActivities![0]!, setupRunId: 'setup-run-output' }];
+
+    render(<SetupActivityNotifications workspace={workspace} runs={runs} />);
+
+    const options = addToast.mock.calls.at(-1)?.[2];
+    expect(options.action.label).toBe('View output');
+    act(() => options.action.onClick());
+
+    expect(selectWorkspace).toHaveBeenCalledWith('ws-1');
+    const dialog = screen.getByRole('dialog', { name: 'Install dependencies' });
+    expect(within(dialog).getByText('Exit 1')).toBeInTheDocument();
+    expect(within(dialog).getByText(/package install failed/)).toBeInTheDocument();
+  });
+
   it('does not offer Retry for a visible Setup failure', () => {
     const workspace = workspaceWithFailure();
     workspace.setupActivities![0]!.retryable = false;

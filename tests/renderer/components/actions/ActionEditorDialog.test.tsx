@@ -8,7 +8,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActionEditorDialog } from '../../../../src/renderer/components/actions/ActionEditorDialog';
 import { useSshHostsStore } from '../../../../src/renderer/stores/ssh-hosts.store';
 
-import type { Action, AgentPreset, Project } from '../../../../src/shared/types';
+import type {
+  Action,
+  AgentPreset,
+  CommandShell,
+  Project,
+} from '../../../../src/shared/types';
+
+const commandShell = vi.hoisted(() => ({
+  current: { kind: 'posix', name: 'zsh' } as CommandShell | undefined,
+}));
+vi.mock('@/hooks/useCommandShell', () => ({ useCommandShell: () => commandShell.current }));
 
 const presetWithMode: AgentPreset = {
   id: 'p1',
@@ -50,6 +60,54 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof ActionEdito
 describe('ActionEditorDialog', () => {
   afterEach(() => {
     useSshHostsStore.setState(useSshHostsStore.getInitialState(), true);
+    commandShell.current = { kind: 'posix', name: 'zsh' };
+  });
+
+  it('says which shell runs a Terminal Command, and what Windows PowerShell lacks', () => {
+    commandShell.current = { kind: 'windows-powershell', name: 'Windows PowerShell 5.1' };
+    renderEditor({ action: { id: 'a1', title: 'Copy env', content: 'cp -n a b', type: 'command' } });
+
+    expect(
+      screen.getByText(
+        'Runs in Windows PowerShell 5.1. Windows PowerShell has no &&, and its cp, mv and rm are cmdlets without their Unix options.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("names the SSH host's shell too when SSH hosts exist", () => {
+    useSshHostsStore.setState({
+      hosts: [{ id: 'ssh-dev', name: 'Devbox', hostname: 'dev.example.com' }],
+      hasLoaded: true,
+    });
+    renderEditor({ action: { id: 'a1', title: 'Test', content: 'npm test', type: 'command' } });
+
+    expect(
+      screen.getByText("Runs in zsh on this computer, and in the SSH host's shell in SSH workspaces.")
+    ).toBeInTheDocument();
+  });
+
+  it('names only this computer\'s shell for a command set to run in the Local copy', () => {
+    useSshHostsStore.setState({
+      hosts: [{ id: 'ssh-dev', name: 'Devbox', hostname: 'dev.example.com' }],
+      hasLoaded: true,
+    });
+    renderEditor({
+      action: {
+        id: 'a1',
+        title: 'Test',
+        content: 'npm test',
+        type: 'command',
+        sshExecutionLocation: 'local-copy',
+      },
+    });
+
+    expect(screen.getByText('Runs in zsh.')).toBeInTheDocument();
+  });
+
+  it('names no shell for a Saved Prompt', () => {
+    renderEditor();
+
+    expect(screen.queryByText(/^Runs in zsh/)).not.toBeInTheDocument();
   });
 
   it('lets a Terminal Command choose where it runs in SSH workspaces, under Advanced', async () => {

@@ -70,3 +70,13 @@ export function powerShellCommandArgs(
   );
   return commandLineLength < MAX_WINDOWS_COMMAND_LINE_LENGTH ? args : null;
 }
+
+/**
+ * Runs `command` in PowerShell, then exits with how it went: a native program's failing exit
+ * code, even when a statement after it succeeded, else 1 when the last statement failed, else 0.
+ * $LASTEXITCODE alone isn't enough: a native program that succeeded leaves it 0 when a cmdlet
+ * after it fails.
+ */
+export function powerShellCommandWithExitCode(command: string): string {
+  return `$global:LASTEXITCODE = $null; ${command}; $komlaSetupSucceeded = $?; exit $(if ($LASTEXITCODE) { $LASTEXITCODE } elseif ($komlaSetupSucceeded) { 0 } else { 1 })`;
+}

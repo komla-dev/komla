@@ -7,6 +7,8 @@ import {
 
 import { invoke } from './define';
 
+import type { CommandShell } from '../../types';
+
 export const shellContract = {
   [IPC.SHELL_OPEN_EXTERNAL]: invoke(shellOpenExternalArgsSchema).returns<void>(),
   [IPC.SHELL_SHOW_ITEM_IN_FOLDER]: invoke(shellPathArgsSchema).returns<void>(),
@@ -14,4 +16,5 @@ export const shellContract = {
   [IPC.SHELL_GET_AVAILABLE_EDITORS]: invoke().returns<{ id: string; name: string }[]>(),
   [IPC.SHELL_OPEN_IN_EDITOR]: invoke(shellOpenInEditorArgsSchema).returns<void>(),
   [IPC.SHELL_GET_WSL_DISTROS]: invoke().returns<string[]>(),
+  [IPC.SHELL_GET_COMMAND_SHELL]: invoke().returns<CommandShell>(),
 } as const;

@@ -59,6 +59,7 @@ export {
 } from '../../shared/lib/workspace-provision-state';
 
 export type {
+  CommandShell,
   TerminalStatus,
   TerminalExecutionLocation,
   TerminalLaunchLocation,

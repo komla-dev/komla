@@ -1,6 +1,7 @@
 import { CaretDown, Sparkle, Terminal, Trash } from '@phosphor-icons/react';
 import { useId, useMemo, useRef, useState } from 'react';
 
+import { CommandShellNote, type CommandRunsOn } from '@/components/actions/CommandShellNote';
 import { ProjectMark } from '@/components/projects/ProjectMark';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -289,6 +290,9 @@ export function ActionEditorDialog({
               type={type}
               content={content}
               background={background}
+              runsOn={
+                hasSshHosts && sshExecutionLocation !== 'local-copy' ? 'either' : 'this-computer'
+              }
               onChange={setContent}
             />
 
@@ -427,12 +431,14 @@ function ActionContentField({
   type,
   content,
   background,
+  runsOn,
   onChange,
 }: {
   fieldId: string;
   type: ActionType;
   content: string;
   background: boolean;
+  runsOn: CommandRunsOn;
   onChange: (value: string) => void;
 }) {
   const label = type === 'command' ? 'Terminal Command' : 'Saved Prompt';
@@ -451,16 +457,19 @@ function ActionContentField({
         </span>
       </div>
       {type === 'command' ? (
-        // A textarea, so a command saved with several lines keeps them.
-        <Textarea
-          id={`${fieldId}-content`}
-          value={content}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g., npm run dev"
-          spellCheck={false}
-          rows={1}
-          className="field-sizing-content max-h-48 min-h-9 resize-none py-2 font-mono text-[13px]"
-        />
+        <>
+          {/* A textarea, so a command saved with several lines keeps them. */}
+          <Textarea
+            id={`${fieldId}-content`}
+            value={content}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="e.g., npm run dev"
+            spellCheck={false}
+            rows={1}
+            className="field-sizing-content max-h-48 min-h-9 resize-none py-2 font-mono text-[13px]"
+          />
+          <CommandShellNote runsOn={runsOn} className="text-xs" />
+        </>
       ) : (
         <>
           <Textarea

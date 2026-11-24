@@ -1,10 +1,13 @@
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { existsSync } from 'fs';
+import { basename } from 'path';
 
 import { addKomlaCliToEnv } from './komla-cli';
 import { createLogger } from './logger';
 import { isZshShell } from './shell-kind';
 import { isWslMode, getWslShell, getWslShellArgs, windowsPathToWsl } from './wsl';
+
+import type { CommandShell } from '../../shared/types';
 
 const logger = createLogger('Shell');
 
@@ -124,26 +127,57 @@ export function buildTerminalEnv(): NodeJS.ProcessEnv {
 const WINDOWS_SHELL_CACHE_MS = 60_000;
 let windowsShell: { path: string; foundAt: number } | undefined;
 
+// Prefer PowerShell 7+ (pwsh) over legacy Windows PowerShell 5.1.
+function windowsShellFromWhere(whereOutput: string | undefined): string {
+  const pwshPath = whereOutput?.trim().split(/\r?\n/)[0];
+  return pwshPath && existsSync(pwshPath) ? pwshPath : 'powershell.exe';
+}
+
+function cachedWindowsShell(): string | undefined {
+  return windowsShell && Date.now() - windowsShell.foundAt < WINDOWS_SHELL_CACHE_MS
+    ? windowsShell.path
+    : undefined;
+}
+
 function findWindowsShell(): string {
-  if (windowsShell && Date.now() - windowsShell.foundAt < WINDOWS_SHELL_CACHE_MS) {
-    return windowsShell.path;
-  }
-  let path = 'powershell.exe';
-  // Prefer PowerShell 7+ (pwsh) over legacy Windows PowerShell 5.1
+  const cached = cachedWindowsShell();
+  if (cached) return cached;
+  let whereOutput: string | undefined;
   try {
-    const result = execFileSync('where.exe', ['pwsh.exe'], {
+    whereOutput = execFileSync('where.exe', ['pwsh.exe'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 3000,
-    });
-    const pwshPath = result.toString().trim().split(/\r?\n/)[0];
-    if (pwshPath && existsSync(pwshPath)) {
-      path = pwshPath;
-    }
+    }).toString();
   } catch {
     // pwsh not installed, fall back to legacy powershell
   }
+  const path = windowsShellFromWhere(whereOutput);
   windowsShell = { path, foundAt: Date.now() };
   return path;
+}
+
+/** findWindowsShell without blocking the main process, for what can wait for the answer. */
+function findWindowsShellAsync(): Promise<string> {
+  const cached = cachedWindowsShell();
+  if (cached) return Promise.resolve(cached);
+  return new Promise((resolve) => {
+    execFile('where.exe', ['pwsh.exe'], { timeout: 3000, windowsHide: true }, (error, stdout) => {
+      const path = windowsShellFromWhere(error ? undefined : String(stdout));
+      windowsShell = { path, foundAt: Date.now() };
+      resolve(path);
+    });
+  });
+}
+
+/** The shell getShell() runs commands in, named for Settings, found without blocking. */
+export async function describeCommandShell(wslDistro?: string): Promise<CommandShell> {
+  if (process.platform === 'win32') {
+    if (isWslMode()) return { kind: 'wsl', name: wslDistro ? `WSL (${wslDistro})` : 'WSL' };
+    return /(?:^|[/\\])pwsh(?:\.exe)?$/i.test(await findWindowsShellAsync())
+      ? { kind: 'powershell', name: 'PowerShell 7' }
+      : { kind: 'windows-powershell', name: 'Windows PowerShell 5.1' };
+  }
+  return { kind: 'posix', name: basename(getShell()) };
 }
 
 /**

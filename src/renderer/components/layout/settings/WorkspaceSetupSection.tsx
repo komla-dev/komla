@@ -1,6 +1,7 @@
 import { CaretDown, CaretUp, Info, ListChecks, Plus, Robot, X } from '@phosphor-icons/react';
 import React from 'react';
 
+import { CommandShellNote, type CommandRunsOn } from '@/components/actions/CommandShellNote';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { IconButton } from '@/components/ui/icon-button';
@@ -717,6 +718,15 @@ export function WorkspaceSetupSection({
                             />
                           </label>
                         )}
+                        {!stepPane &&
+                          !secretFile &&
+                          !stepAgent &&
+                          (!('actionId' in s) || selectedAction?.type === 'command') && (
+                            <CommandShellNote
+                              runsOn={setupStepRunsOn(destination, sshDestinationsAvailable)}
+                              className="order-1 ml-[72px]"
+                            />
+                          )}
                         {'actionId' in s && !s.actionId && (
                           <StepWarning>
                             Choose a quick command. Until then this step opens an empty terminal.
@@ -1158,6 +1168,16 @@ function secretFileStorageNote(status: SecretFileStatus | undefined, keychain: b
   return status?.storage === 'file'
     ? 'Kept unencrypted from before this computer had a keychain, until the step next runs, and out of the project’s settings.'
     : 'Encrypted by this computer’s keychain and kept out of the project’s settings.';
+}
+
+/** Where a step's command runs, and so which shell runs it. */
+function setupStepRunsOn(
+  destination: SetupDestination,
+  sshDestinationsAvailable: boolean
+): CommandRunsOn {
+  if (destination === 'ssh-workspace-repository') return 'ssh-host';
+  if (destination === 'workspace-repository' && sshDestinationsAvailable) return 'either';
+  return 'this-computer';
 }
 
 function StepWarning({ children }: { children: React.ReactNode }) {

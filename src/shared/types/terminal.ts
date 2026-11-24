@@ -57,3 +57,10 @@ export interface Terminal {
   /** The delivery of the newest hook taken in from its Hook Journal. */
   lastJournalDeliveryId?: string;
 }
+
+/** The shell this computer runs Terminal Commands and Setup steps in, as Settings names it. */
+export interface CommandShell {
+  kind: 'powershell' | 'windows-powershell' | 'wsl' | 'posix';
+  /** Such as "PowerShell 7", "Windows PowerShell 5.1", "WSL (Ubuntu)" or "zsh". */
+  name: string;
+}

@@ -80,6 +80,7 @@ import type {
 import type { TypedIpcRenderer } from '../shared/ipc/contract';
 import type { ManagedTmuxFindResult } from '../shared/lib/ssh-tmux-attach';
 import type {
+  CommandShell,
   AskpassRequest,
   BranchDeletionResult,
   DevPreviewBounds,
@@ -1297,6 +1298,9 @@ const api = {
     ipcRenderer.invoke(IPC.SHELL_OPEN_IN_EDITOR, editorId, dirPath),
 
   getWslDistros: (): Promise<string[]> => ipcRenderer.invoke(IPC.SHELL_GET_WSL_DISTROS),
+
+  /** The shell Terminal Commands and Setup steps run in on this computer. */
+  getCommandShell: (): Promise<CommandShell> => ipcRenderer.invoke(IPC.SHELL_GET_COMMAND_SHELL),
 
   // Notes
   listNotes: (scopeId: string): Promise<NoteSummary[]> =>

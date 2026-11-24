@@ -4,7 +4,10 @@ import * as pty from 'node-pty';
 
 import { withKomlaCliOnPath } from '../lib/komla-cli';
 import { createLogger } from '../lib/logger';
-import { powerShellCommandArgs } from '../lib/powershell-native-arguments';
+import {
+  powerShellCommandArgs,
+  powerShellCommandWithExitCode,
+} from '../lib/powershell-native-arguments';
 import { buildTerminalEnv, getShell, getShellArgs } from '../lib/shell';
 import { isWslShell } from '../lib/shell-command';
 import { wslEnv } from '../lib/wsl';
@@ -64,7 +67,7 @@ class BackgroundProcessService {
     if (isWslShell(shell)) env.WSLENV = wslEnv(env.WSLENV, ['KOMLA_WORKSPACE_ID']);
 
     const completionCommand = isPowerShell
-      ? `$global:LASTEXITCODE = $null; ${command}; $komlaSetupSucceeded = $?; $komlaSetupExitCode = $LASTEXITCODE; if ($null -eq $komlaSetupExitCode) { $komlaSetupExitCode = if ($komlaSetupSucceeded) { 0 } else { 1 } }; exit $komlaSetupExitCode`
+      ? powerShellCommandWithExitCode(command)
       : `${withKomlaCliOnPath(command, env, shell)}; exit $?`;
     // The shell runs the command from its arguments, as visible terminals' startup commands do: a
     // typed command would land in the user's shell history. -ilc loads the same login and rc files
