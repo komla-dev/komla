@@ -226,7 +226,10 @@ function createFrameBufferedWriter(
   function schedule(): void {
     cancelPending();
     if (document.visibilityState === 'hidden') {
-      pending = { kind: 'timeout', id: window.setTimeout(flush, HIDDEN_WRITE_FLUSH_MS) };
+      pending = {
+        kind: 'timeout',
+        id: window.setTimeout(flush, HIDDEN_WRITE_FLUSH_MS),
+      };
     } else {
       pending = { kind: 'frame', id: requestAnimationFrame(flush) };
       document.addEventListener('visibilitychange', schedule);
@@ -257,6 +260,31 @@ function programTracksMouse(terminal: Terminal): boolean {
 
 function loadFont(fontSize: number, fontFamily: string): Promise<unknown> | undefined {
   return document.fonts?.load?.(`${fontSize}px ${fontFamily}`);
+}
+
+/**
+ * Starts loading the font's bold face, which loads only when first asked for: bold text drawn
+ * before it arrived came from a fallback font. Cells are measured in the regular face, so sizing
+ * doesn't wait for it.
+ */
+function preloadBoldFace(fontSize: number, fontFamily: string): void {
+  void document.fonts?.load?.(`bold ${fontSize}px ${fontFamily}`).catch(() => undefined);
+}
+
+/** A font family name as CSS compares it: unquoted, trimmed, in any case. */
+function fontFamilyKey(family: string): string {
+  return family
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .toLowerCase();
+}
+
+/** Whether a font face that finished loading is one of the terminal's fonts. */
+function usesFontFace(terminal: Terminal, face: FontFace): boolean {
+  const family = fontFamilyKey(face.family);
+  return String(terminal.options.fontFamily ?? '')
+    .split(',')
+    .some((name) => fontFamilyKey(name) === family);
 }
 
 function fitAfterFontLoad(fontSize: number, fontFamily: string, fit: () => void): void {
@@ -293,6 +321,7 @@ export class TerminalRendererRuntime {
   // A remote-control device may own a PTY's size; the desktop then renders at that size.
   private readonly remoteSizes = new Map<string, { cols: number; rows: number }>();
   private sizeAuthorityCleanup: (() => void) | null = null;
+  private fontLoadCleanup: (() => void) | null = null;
 
   attach(request: AttachTerminalRendererRequest): void {
     let entry = this.entries.get(request.terminalId);
@@ -399,6 +428,8 @@ export class TerminalRendererRuntime {
       this.resetCleanup = null;
       this.sizeAuthorityCleanup?.();
       this.sizeAuthorityCleanup = null;
+      this.fontLoadCleanup?.();
+      this.fontLoadCleanup = null;
     }
   }
 
@@ -567,6 +598,7 @@ export class TerminalRendererRuntime {
     terminal.refresh(0, terminal.rows - 1);
     this.fit(entry);
     fitAfterFontLoad(configuration.fontSize, configuration.fontFamily, () => this.fit(entry));
+    preloadBoldFace(configuration.fontSize, configuration.fontFamily);
   }
 
   updatePalette(theme: ITheme): void {
@@ -785,7 +817,9 @@ export class TerminalRendererRuntime {
       return false;
     });
     // Times lines for the links popover.
-    const lineTimes = createTerminalLineTimes(terminal, { paused: () => replaying > 0 });
+    const lineTimes = createTerminalLineTimes(terminal, {
+      paused: () => replaying > 0,
+    });
     terminal.open(request.container);
     stopHiddenTerminalDrawing(terminal);
     const xtermElement = request.container.querySelector('.xterm') as HTMLElement | null;
@@ -875,6 +909,7 @@ export class TerminalRendererRuntime {
     this.entries.set(request.terminalId, entry);
     this.ensureResetListener();
     this.ensureSizeAuthorityListener();
+    this.ensureFontLoadListener();
 
     // xterm reports right-button presses to a program tracking the mouse, and some act on them
     // (Claude Code pastes) while the pane menu opens too. Unless the setting sends right-clicks to
@@ -950,6 +985,7 @@ export class TerminalRendererRuntime {
       this.fit(entry);
       this.syncPtySize(entry, entry.visible);
     };
+    preloadBoldFace(Number(request.options.fontSize), String(request.options.fontFamily));
     void Promise.allSettled([
       snapshotApplied,
       loadFont(Number(request.options.fontSize), String(request.options.fontFamily)),
@@ -1285,6 +1321,29 @@ export class TerminalRendererRuntime {
   private ensureResetListener(): void {
     if (this.resetCleanup || typeof window === 'undefined' || !window.api?.onTerminalReset) return;
     this.resetCleanup = window.api.onTerminalReset((terminalId) => this.reset(terminalId));
+  }
+
+  /**
+   * Redraws a terminal's glyphs when one of its font faces finishes loading. The renderer keeps each
+   * glyph it has drawn, so glyphs drawn while their face was still loading kept a fallback font's
+   * shapes, mixed in with the right ones drawn later.
+   */
+  private ensureFontLoadListener(): void {
+    const fonts = typeof document === 'undefined' ? undefined : document.fonts;
+    if (this.fontLoadCleanup || !fonts?.addEventListener) return;
+    const redraw = (event: Event): void => {
+      const faces = (event as FontFaceSetLoadEvent).fontfaces ?? [];
+      for (const entry of this.entries.values()) {
+        if (entry.disposed || !faces.some((face) => usesFontFace(entry.terminal, face))) continue;
+        try {
+          entry.terminal.clearTextureAtlas();
+        } catch {
+          // A Terminal Renderer Runtime may be between hosts; it draws afresh when shown.
+        }
+      }
+    };
+    fonts.addEventListener('loadingdone', redraw);
+    this.fontLoadCleanup = () => fonts.removeEventListener('loadingdone', redraw);
   }
 
   private ensureSizeAuthorityListener(): void {

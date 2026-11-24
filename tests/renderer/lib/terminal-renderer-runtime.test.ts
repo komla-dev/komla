@@ -18,6 +18,7 @@ interface MockTerminal {
   element: HTMLElement | undefined;
   options: Record<string, unknown>;
   modes: { mouseTrackingMode: string };
+  clearTextureAtlas: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   selection: string;
   oscHandlers: Map<number, (data: string) => boolean>;
@@ -95,6 +96,7 @@ vi.mock('@xterm/xterm', () => ({
     selectionDisposables: Array<{ dispose: ReturnType<typeof vi.fn> }> = [];
     resizeListeners: Array<(size: { cols: number; rows: number }) => void> = [];
     attachCustomKeyEventHandler = vi.fn();
+    clearTextureAtlas = vi.fn();
     dispose = vi.fn();
     focus = vi.fn();
     getSelection = vi.fn(() => this.selection);
@@ -1149,6 +1151,77 @@ describe('TerminalRendererRuntime', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(api.resizePty).toHaveBeenLastCalledWith('term-moved', 100, 36);
     runtime.dispose('term-moved');
+  });
+
+  it('loads the bold face of the terminal font along with the regular one', async () => {
+    // The bundled font's bold face loads only when first asked for, so bold text drawn before it
+    // arrived came from a fallback font.
+    const runtime = new TerminalRendererRuntime();
+    attach(runtime, 'term-bold', makeHost());
+    await vi.advanceTimersByTimeAsync(0);
+
+    const load = vi.mocked(document.fonts.load);
+    expect(load).toHaveBeenCalledWith('14px monospace');
+    expect(load).toHaveBeenCalledWith('bold 14px monospace');
+    runtime.dispose('term-bold');
+  });
+
+  it('redraws terminals’ glyphs when one of their fonts finishes loading', async () => {
+    // A glyph drawn while its face was still loading came from a fallback font, and the renderer
+    // kept it: bold words mixed glyphs from two fonts until the app restarted.
+    const fonts = Object.assign(new EventTarget(), { load: vi.fn().mockResolvedValue([]) });
+    Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+    const loaded = (family: string) =>
+      Object.assign(new Event('loadingdone'), { fontfaces: [{ family }] });
+    const runtime = new TerminalRendererRuntime();
+    attach(runtime, 'term-a', makeHost());
+    attach(runtime, 'term-b', makeHost());
+    await vi.advanceTimersByTimeAsync(0);
+    const [first, second] = xtermState.terminals;
+
+    // Another font, such as the interface's, leaves the terminals' glyphs alone.
+    fonts.dispatchEvent(loaded('Geist'));
+    expect(first.clearTextureAtlas).not.toHaveBeenCalled();
+
+    fonts.dispatchEvent(loaded('monospace'));
+    expect(first.clearTextureAtlas).toHaveBeenCalledOnce();
+    expect(second.clearTextureAtlas).toHaveBeenCalledOnce();
+
+    // With no terminals left, it stops listening.
+    runtime.dispose('term-a');
+    runtime.dispose('term-b');
+    fonts.dispatchEvent(loaded('monospace'));
+    expect(first.clearTextureAtlas).toHaveBeenCalledOnce();
+    expect(second.clearTextureAtlas).toHaveBeenCalledOnce();
+  });
+
+  it('matches a loaded font face to a terminal by whole family name, ignoring case', async () => {
+    const fonts = Object.assign(new EventTarget(), { load: vi.fn().mockResolvedValue([]) });
+    Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+    const loaded = (family: string) =>
+      Object.assign(new Event('loadingdone'), { fontfaces: [{ family }] });
+    const runtime = new TerminalRendererRuntime();
+    runtime.attach({
+      terminalId: 'term-family',
+      container: makeHost(),
+      options: {
+        fontSize: 14,
+        fontFamily: '"geist mono", "JetBrainsMonoNL Nerd Font Mono", monospace',
+      },
+      visible: true,
+      context: { workspaceId: 'workspace-1', executionLocation: 'workspace' },
+      callbacks: { keyHandler: () => true, onUrlLink: vi.fn(), onFileLink: vi.fn() },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const [terminal] = xtermState.terminals;
+
+    // The interface's Geist is not the terminal's Geist Mono.
+    fonts.dispatchEvent(loaded('Geist'));
+    expect(terminal.clearTextureAtlas).not.toHaveBeenCalled();
+
+    fonts.dispatchEvent(loaded('Geist Mono'));
+    expect(terminal.clearTextureAtlas).toHaveBeenCalledOnce();
+    runtime.dispose('term-family');
   });
 
   it('sizes a new renderer’s PTY in a hidden window, which draws no frames', async () => {
