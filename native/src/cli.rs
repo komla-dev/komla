@@ -2187,10 +2187,8 @@ fn agent_command(
             if mode.is_some() && preset.is_none() {
                 bail!("--mode requires --preset");
             }
+            // Without --preset, Komla picks the level on the agent it would start anyway.
             let effort = take_option(&mut options, "--effort")?;
-            if effort.is_some() && preset.is_none() {
-                bail!("--effort requires --preset");
-            }
             let name = take_option(&mut options, "--name")?;
             let description = take_option(&mut options, "--description")?;
             let branch = take_option(&mut options, "--branch")?;
@@ -2242,7 +2240,8 @@ leave out --name, --description, --branch and --effort"
                 from_current_branch,
                 cwd: None,
             };
-            let offline_unsupported = preset.is_some() || mode.is_some() || project.is_some();
+            let offline_unsupported =
+                preset.is_some() || mode.is_some() || effort.is_some() || project.is_some();
             let mut operation = json!({
                 "type": "agent.launch",
                 "destination": destination
@@ -4831,6 +4830,11 @@ browser preview.";
 
         assert!(result.unwrap_err().to_string().contains("--preset"));
         assert!(api.offline_requests.is_empty());
+
+        let (api, result) = run_disconnected(&["launch", "x", "--effort", "High"]);
+
+        assert!(result.unwrap_err().to_string().contains("--effort"));
+        assert!(api.offline_requests.is_empty());
     }
 
     #[test]
@@ -6941,18 +6945,22 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
     }
 
     #[test]
-    fn rejects_effort_without_preset_before_contacting_komla() {
-        let mut api = FakeApi {
-            requests: Vec::new(),
-            target: None,
-            routed: None,
-            responses: VecDeque::new(),
-        };
+    fn effort_without_preset_leaves_the_agent_to_komla() {
+        let mut api = FakeApi::responding(json!({
+            "ok": true,
+            "result": {
+                "state": "provisioning",
+                "destination": {"kind": "workspace", "workspaceId": "workspace-2"},
+                "agent": {"preset": {"id": "codex", "name": "Codex"}, "effort": {"id": "high", "name": "High"}}
+            }
+        }));
 
-        let error = run_with(&mut api, &["agent", "launch", "--effort", "high"], "").unwrap_err();
+        run_with(&mut api, &["launch", "Build it", "--effort", "High"], "").unwrap();
 
-        assert!(error.to_string().contains("--effort requires --preset"));
-        assert!(api.requests.is_empty());
+        let body: Value = serde_json::from_slice(&api.requests[0].body).unwrap();
+        assert_eq!(body["type"], "agent.launch");
+        assert_eq!(body["effort"], "High");
+        assert!(body.get("preset").is_none());
     }
 
     #[test]

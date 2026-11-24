@@ -146,7 +146,10 @@ takes no `--workspace` and works the same through an SSH host's tunnel.
 workspace takes (`--project`, `--name`, `--description`, `--branch`, `--from-current-branch`).
 `komla agent launch` is its older form, which opens a tab unless `--new-workspace` is given. Use
 `--prompt-file` for longer instructions or stdin, and `--preset` with an optional `--mode` and
-`--effort` after discovering canonical IDs through `komla agent presets --json`. Each preset's
+`--effort` after discovering canonical IDs through `komla agent presets --json`. `--effort`
+without `--preset` picks the level on the agent the launch would start anyway: the pinned one, else
+the calling workspace's, else the first active one. If that agent no longer exists, `--effort` is
+refused (`AGENT_PRESET_NOT_FOUND`) rather than dropped. Each preset's
 `effort` lists the `levels` its level picker shows under the picker's `title`, which an agent may
 have renamed, such as to Model; a preset whose picker is hidden lists none, and without `--effort`
 the agent starts at its default level. A level it doesn't list is refused

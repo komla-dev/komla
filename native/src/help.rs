@@ -237,7 +237,7 @@ const COMMANDS: &[Command] = &[
             ("--here", "Open a tab in the current workspace instead."),
             ("--preset <name-or-id>", "The agent to start, from `komla agent presets`."),
             ("--mode <id>", "One of that agent's launch modes."),
-            ("--effort <id-or-name>", "One of that agent's effort levels; without it, the agent's default. A level marked isolated SSH host starts only on an SSH host the user marked isolated."),
+            ("--effort <id-or-name>", "One of that agent's effort levels, or without --preset those of the agent the launch starts, such as this workspace's; without it, the agent's default. A level marked isolated SSH host starts only on an SSH host the user marked isolated."),
             ("--prompt-file <path|->", "Read the prompt from a file, or stdin with -."),
             ("--project <name-or-id>", "The project for the new workspace. Outside every workspace, such as in an SSH host's shell, it's required, and leaving it out lists the projects."),
             ("--name <name>", "The new workspace's title."),

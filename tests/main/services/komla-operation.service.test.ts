@@ -1015,6 +1015,52 @@ describe('KomlaOperationService', () => {
       );
     });
 
+    it('picks the level on the default agent when no preset is named', async () => {
+      const { service, createWorkspace } = effortService();
+
+      await expect(
+        service.execute(
+          { terminalId: 'terminal-1' },
+          { type: 'agent.launch', destination: 'workspace', effort: 'High' }
+        )
+      ).resolves.toMatchObject({
+        agent: { preset: { id: 'codex' }, effort: { id: 'high', name: 'High' } },
+      });
+      expect(createWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ presetId: 'codex', reasoningLevelId: 'high' })
+      );
+    });
+
+    it("refuses a level for a pinned agent that's gone, rather than dropping it", async () => {
+      const { service, createWorkspace } = effortService([codex], {
+        getConfig: () => ({ agentLaunchDefaultPresetId: 'deleted' }),
+      });
+
+      await expect(
+        service.execute(
+          { terminalId: 'terminal-1' },
+          { type: 'agent.launch', destination: 'workspace', effort: 'High' }
+        )
+      ).rejects.toMatchObject({ code: 'AGENT_PRESET_NOT_FOUND' });
+      expect(createWorkspace).not.toHaveBeenCalled();
+    });
+
+    it("names the workspace's agent when it's gone, rather than every agent", async () => {
+      const { service } = effortService([codex], {
+        findWorkspaceByTerminalId: () => ({ ...workspace, presetId: 'old-agent' }),
+      });
+
+      await expect(
+        service.execute(
+          { terminalId: 'terminal-1' },
+          { type: 'agent.launch', destination: 'workspace', effort: 'High' }
+        )
+      ).rejects.toMatchObject({
+        code: 'AGENT_PRESET_NOT_FOUND',
+        message: expect.stringContaining('"old-agent"'),
+      });
+    });
+
     it('starts a level that skips permission prompts only on an isolated SSH host', async () => {
       const { service, addAgentTab } = effortService([
         {

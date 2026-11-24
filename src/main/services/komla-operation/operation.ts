@@ -2184,7 +2184,7 @@ export class KomlaOperationService {
     const defaultPresetId = pin.presetId ?? workspace?.presetId ?? activeEntries.at(0)?.presetId;
     const preset = this.selectPresetForLaunch(presets, activeIds, defaultPresetId, presetSelector);
     if (!preset) {
-      return this.selectionWithoutPreset(pin.presetId, pin.modeId, modeSelector, effortSelector);
+      return this.selectionWithoutPreset(pin, workspace?.presetId, modeSelector, effortSelector);
     }
     this.requireLaunchablePreset(preset);
     // Otherwise the agent opens without the task, and the launcher thinks it handed it over.
@@ -2245,11 +2245,25 @@ export class KomlaOperationService {
   }
 
   private selectionWithoutPreset(
-    configuredPresetId?: string,
-    configuredModeId?: string,
+    {
+      presetId: configuredPresetId,
+      modeId: configuredModeId,
+    }: { presetId?: string; modeId?: string },
+    workspacePresetId: string | null | undefined,
     modeSelector?: string,
     effortSelector?: string
   ): AgentSelection {
+    // The agent the launch would start is gone, so it has no levels: it would start at its default.
+    const missingAgent = configuredPresetId
+      ? `the pinned agent "${configuredPresetId}"`
+      : workspacePresetId && `this workspace's agent "${workspacePresetId}"`;
+    if (effortSelector && missingAgent) {
+      throw new KomlaOperationError(
+        'AGENT_PRESET_NOT_FOUND',
+        `An effort level cannot be selected because ${missingAgent} no longer exists. Name one with --preset.`,
+        404
+      );
+    }
     if (configuredPresetId) {
       return {
         preset: {
