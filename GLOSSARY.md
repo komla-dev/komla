@@ -15,6 +15,13 @@ for work that may not last. Deleting it for good, as the Trash does after seven 
 folder too, unless the user chose Keep Folder, which makes it an opened folder like any other.
 _Avoid_: Temp workspace, sandbox
 
+**Open Existing Branch**:
+Starting a workspace on a branch the project already has, checked out with its commits, rather
+than on a new one. **New Branch from** a branch instead starts a branch of the workspace's own at
+that branch's commit, leaving the branch itself alone. The Quick Create menu names its two pickers
+so, and `komla launch --branch` opens a branch that exists.
+_Avoid_: New on Branch, New from Branch, which read alike
+
 **Workspace Setup**:
 A project's configuration for preparing and cleaning up its workspaces: Setup steps and Trash
 cleanup.

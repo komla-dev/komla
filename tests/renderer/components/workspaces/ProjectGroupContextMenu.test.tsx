@@ -240,6 +240,16 @@ describe('ProjectGroupContextMenu action wiring', () => {
     expect(screen.getByRole('menuitem', { name: 'Quick New Workspace' })).toBeInTheDocument();
   });
 
+  it('names the branch picker for what it does: open a branch that already exists', () => {
+    render(
+      <ProjectGroupContextMenu project={project}>
+        <div>trigger</div>
+      </ProjectGroupContextMenu>
+    );
+
+    expect(screen.getByText('Open Existing Branch…')).toBeInTheDocument();
+  });
+
   it("opens the project's branch cleanup", async () => {
     const user = userEvent.setup();
     render(
@@ -360,7 +370,7 @@ describe('ProjectGroupContextMenu action wiring', () => {
       </ProjectGroupContextMenu>
     );
 
-    expect(screen.queryByText(/new on branch/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/open existing branch/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/workspace setup/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/clean up branches/i)).not.toBeInTheDocument();
 

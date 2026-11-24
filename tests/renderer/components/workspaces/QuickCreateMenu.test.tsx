@@ -433,11 +433,11 @@ describe('QuickCreateMenu action wiring', () => {
 });
 
 /**
- * Branch-picker coverage for the "New from Branch..." menu split.
+ * Branch-picker coverage for the "New Branch from…" / "Open Existing Branch…" split.
  *
- * The branches state is shared between the two pickers ("New from Branch..."
- * and "New on Branch..."), so each branch row appears twice in the rendered
- * DOM. The "New from" picker renders first, the "New on" picker second; with
+ * The branches state is shared between the two pickers, so each branch row
+ * appears twice in the rendered DOM. The "New Branch from" picker renders
+ * first, the "Open Existing Branch" picker second; with
  * `remoteBranchesExpanded: true`, the order inside each picker is:
  * remote-only branches first, then local. We rely on that order to
  * disambiguate clicks via getAllByRole indices.
@@ -463,6 +463,16 @@ describe('QuickCreateMenu branch picker', () => {
       fetchFromRemote: vi.fn().mockResolvedValue(undefined),
       getMainBranch: vi.fn().mockResolvedValue('main'),
     } as any;
+  });
+
+  it('names the pickers apart: a new branch from one, or an existing branch as it is', async () => {
+    render(<QuickCreateMenu />);
+
+    // The sub-trigger mock renders its label without an element of its own.
+    await screen.findAllByText('Test Project');
+    expect(document.body).toHaveTextContent('New Branch from…');
+    expect(document.body).toHaveTextContent('Open Existing Branch…');
+    expect(document.body).not.toHaveTextContent(/New (from|on) Branch/);
   });
 
   it('forks a workspace from a local base branch without origin/ qualification', async () => {

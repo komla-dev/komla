@@ -635,7 +635,7 @@ export function ProjectGroupContextMenu({ project, children }: ProjectGroupConte
             {renderActionArrow(null, 'Quick Commands')}
           </div>
 
-          {/* Open on branch... submenu with branch picker */}
+          {/* Open Existing Branch… submenu with branch picker */}
           {!isDirectoryProject && (
             <ContextMenuSub
               onOpenChange={(open) => {
@@ -649,7 +649,7 @@ export function ProjectGroupContextMenu({ project, children }: ProjectGroupConte
             >
               <ContextMenuSubTrigger disabled={isCreating}>
                 <GitBranch />
-                New on Branch...
+                Open Existing Branch…
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-80 w-72 max-w-[calc(100vw-1rem)] overflow-y-auto !pt-0">
                 <div className="sticky top-0 z-10 -mx-1 mb-1 border-b border-foreground/10 bg-inherit p-1">

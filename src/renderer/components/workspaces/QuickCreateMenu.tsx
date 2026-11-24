@@ -827,8 +827,8 @@ export function QuickCreateMenu({ className }: { className?: string }) {
           {gitProjects.length > 0 && (
             <>
               <DropdownMenuSeparator />
-              {renderBranchProjectPicker('New from Branch…', 'newFrom')}
-              {renderBranchProjectPicker('New on Branch…', 'open')}
+              {renderBranchProjectPicker('New Branch from…', 'newFrom')}
+              {renderBranchProjectPicker('Open Existing Branch…', 'open')}
             </>
           )}
           <DropdownMenuSeparator />
