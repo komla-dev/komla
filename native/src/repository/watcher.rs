@@ -162,40 +162,120 @@ pub enum RepositoryWatchSignal {
     IntegrityLost,
 }
 
-#[derive(Debug, Default)]
+/// When to rescan a repository after its files change. A scan waits for changes to pause, but
+/// no longer than `max_delay_ms`. That limit doubles each time changes are still arriving when it
+/// runs out, as when a build writes files nonstop, and resets once they pause.
+#[derive(Debug)]
 pub struct SnapshotDebounce {
     first_dirty_at_ms: Option<u64>,
+    last_dirty_at_ms: Option<u64>,
     due_at_ms: Option<u64>,
+    // A failed scan's retry, kept apart so changes neither postpone it nor count it as one.
+    retry_at_ms: Option<u64>,
+    max_delay_ms: u64,
+    // A commit or other ref change is pending, which the backoff mustn't hold back.
+    git_changed: bool,
+    taken_at_ms: Option<u64>,
+}
+
+impl Default for SnapshotDebounce {
+    fn default() -> Self {
+        Self {
+            first_dirty_at_ms: None,
+            last_dirty_at_ms: None,
+            due_at_ms: None,
+            retry_at_ms: None,
+            max_delay_ms: Self::MAX_DELAY_MS,
+            git_changed: false,
+            taken_at_ms: None,
+        }
+    }
 }
 
 impl SnapshotDebounce {
     pub const QUIET_PERIOD_MS: u64 = 500;
     pub const MAX_DELAY_MS: u64 = 3_000;
+    /// The longest a scan waits while changes never pause.
+    pub const BUSY_MAX_DELAY_MS: u64 = 30_000;
 
     pub fn mark_dirty(&mut self, now_ms: u64) {
+        self.end_backoff_if_quiet(now_ms);
         let first = *self.first_dirty_at_ms.get_or_insert(now_ms);
+        self.last_dirty_at_ms = Some(now_ms);
+        let max_delay = if self.git_changed {
+            Self::MAX_DELAY_MS
+        } else {
+            self.max_delay_ms
+        };
         self.due_at_ms = Some(
             now_ms
                 .saturating_add(Self::QUIET_PERIOD_MS)
-                .min(first.saturating_add(Self::MAX_DELAY_MS)),
+                .min(first.saturating_add(max_delay)),
         );
     }
 
+    /// A change to Git's refs, such as a commit, shows as soon as it would without the backoff.
+    pub fn mark_git_changed(&mut self, now_ms: u64) {
+        self.git_changed = true;
+        self.mark_dirty(now_ms);
+    }
+
+    /// Rescans at once, unless changes are already pending: then the rescan joins them, so
+    /// a burst that overflows the event queue still backs off.
     pub fn mark_integrity_lost(&mut self, now_ms: u64) {
+        if self.first_dirty_at_ms.is_some() {
+            self.mark_dirty(now_ms);
+            return;
+        }
+        self.end_backoff_if_quiet(now_ms);
         self.first_dirty_at_ms = Some(now_ms);
         self.due_at_ms = Some(now_ms);
     }
 
+    /// Scans again by `at_ms`, after a failed scan.
+    pub fn retry_at(&mut self, at_ms: u64) {
+        self.retry_at_ms = Some(self.retry_at_ms.map_or(at_ms, |retry| retry.min(at_ms)));
+    }
+
+    // Files that stayed unchanged for the quiet period after a scan mean the burst that raised
+    // the backoff is over, even when that scan was taken while they were still changing.
+    fn end_backoff_if_quiet(&mut self, now_ms: u64) {
+        if self.first_dirty_at_ms.is_none()
+            && self
+                .taken_at_ms
+                .is_none_or(|taken| now_ms >= taken.saturating_add(Self::QUIET_PERIOD_MS))
+        {
+            self.max_delay_ms = Self::MAX_DELAY_MS;
+        }
+    }
+
     pub fn next_due_at_ms(&self) -> Option<u64> {
-        self.due_at_ms
+        match (self.due_at_ms, self.retry_at_ms) {
+            (Some(due), Some(retry)) => Some(due.min(retry)),
+            (due, retry) => due.or(retry),
+        }
     }
 
     pub fn take_if_due(&mut self, now_ms: u64) -> bool {
-        if self.due_at_ms.is_none_or(|due| now_ms < due) {
+        if self.next_due_at_ms().is_none_or(|due| now_ms < due) {
             return false;
         }
+        // A scan for lost integrity or a retry alone says nothing about whether files still change.
+        if let Some(last) = self.last_dirty_at_ms {
+            self.max_delay_ms = if now_ms < last.saturating_add(Self::QUIET_PERIOD_MS) {
+                self.max_delay_ms
+                    .saturating_mul(2)
+                    .min(Self::BUSY_MAX_DELAY_MS)
+            } else {
+                Self::MAX_DELAY_MS
+            };
+        }
         self.first_dirty_at_ms = None;
+        self.last_dirty_at_ms = None;
         self.due_at_ms = None;
+        self.retry_at_ms = None;
+        self.git_changed = false;
+        self.taken_at_ms = Some(now_ms);
         true
     }
 }

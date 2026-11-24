@@ -261,7 +261,7 @@ impl WorkspaceRuntime {
         self.changed_paths =
             merge_changed_paths(self.scan_changed_paths.take(), self.changed_paths.take());
         self.file_list_dirty |= self.scan_file_list_dirty;
-        self.debounce.mark_dirty(now_ms.saturating_add(1_000));
+        self.debounce.retry_at(now_ms.saturating_add(1_500));
     }
 
     /// Records a working-tree change whose paths aren't known.
@@ -736,7 +736,12 @@ fn apply_event(event: WatchEvent, workspaces: &mut [WorkspaceRuntime]) {
                 // Keep watching until the replacement is ready.
                 workspace.watcher_recovery.request_restart(now_ms());
             }
-            workspace.debounce.mark_dirty(now_ms());
+            // Not `GitHead`: it also covers the index, which any `git status` rewrites.
+            if kinds.contains(&RepositoryEventKind::GitRefs) {
+                workspace.debounce.mark_git_changed(now_ms());
+            } else {
+                workspace.debounce.mark_dirty(now_ms());
+            }
         }
         Some(RepositoryWatchSignal::IntegrityLost) => {
             workspace.mark_working_tree_unknown();

@@ -515,6 +515,136 @@ mod tests {
         assert!(debounce.take_if_due(5_000));
     }
 
+    /// Changes every 100ms from `from` until a scan is due; returns when it was taken.
+    fn churn_until_scan(debounce: &mut SnapshotDebounce, from: u64) -> u64 {
+        let mut now = from;
+        loop {
+            debounce.mark_dirty(now);
+            if debounce.take_if_due(now) {
+                return now;
+            }
+            now += 100;
+        }
+    }
+
+    /// Churns through `bursts` scans from `from`; returns just after the last one.
+    fn churn_scans(debounce: &mut SnapshotDebounce, from: u64, bursts: usize) -> u64 {
+        let mut now = from;
+        for _ in 0..bursts {
+            now = churn_until_scan(debounce, now) + 100;
+        }
+        now
+    }
+
+    #[test]
+    fn backs_off_while_files_never_stop_changing_and_recovers_once_they_do() {
+        let mut debounce = SnapshotDebounce::default();
+        let mut scans = Vec::new();
+        let mut now = 0;
+        for _ in 0..6 {
+            let at = churn_until_scan(&mut debounce, now);
+            scans.push(at - now);
+            now = at + 100;
+        }
+        // A build writing files nonstop is rescanned less and less often, up to a ceiling.
+        assert_eq!(scans, [3_000, 6_000, 12_000, 24_000, 30_000, 30_000]);
+
+        // Once the files stop changing, a single edit shows within the quiet period again.
+        debounce.mark_dirty(now);
+        assert_eq!(debounce.next_due_at_ms(), Some(now + 500));
+        assert!(debounce.take_if_due(now + 500));
+        let at = churn_until_scan(&mut debounce, now + 10_000);
+        assert_eq!(at - (now + 10_000), 3_000);
+    }
+
+    #[test]
+    fn a_burst_long_after_a_build_starts_without_its_backoff() {
+        let mut debounce = SnapshotDebounce::default();
+        // The build's last scan is taken while it still writes; then it stops.
+        let now = churn_scans(&mut debounce, 0, 5);
+        // An hour later an install writes files nonstop.
+        let later = now + 3_600_000;
+        assert_eq!(churn_until_scan(&mut debounce, later) - later, 3_000);
+    }
+
+    #[test]
+    fn lost_integrity_during_a_burst_waits_with_it_instead_of_scanning_at_once() {
+        let mut debounce = SnapshotDebounce::default();
+        // Nothing pending: rescan straight away, as when a watcher starts.
+        debounce.mark_integrity_lost(1_000);
+        assert!(debounce.take_if_due(1_000));
+
+        // A build overflowing the event queue mid-burst doesn't skip the backoff.
+        let first = churn_until_scan(&mut debounce, 2_000);
+        assert_eq!(first, 5_000);
+        debounce.mark_dirty(5_100);
+        debounce.mark_integrity_lost(5_200);
+        assert_eq!(debounce.next_due_at_ms(), Some(5_700));
+        debounce.mark_dirty(5_600);
+        debounce.mark_integrity_lost(5_700);
+        assert!(!debounce.take_if_due(5_700));
+    }
+
+    #[test]
+    fn lost_integrity_between_bursts_keeps_the_backoff() {
+        let mut debounce = SnapshotDebounce::default();
+        let now = churn_scans(&mut debounce, 0, 3);
+        // The build overflows the watcher right after a scan, with nothing else pending.
+        debounce.mark_integrity_lost(now);
+        assert!(debounce.take_if_due(now));
+        assert_eq!(
+            churn_until_scan(&mut debounce, now + 100) - (now + 100),
+            24_000
+        );
+    }
+
+    #[test]
+    fn a_commit_during_a_build_shows_without_waiting_out_the_backoff() {
+        let mut debounce = SnapshotDebounce::default();
+        let now = churn_scans(&mut debounce, 0, 4);
+        debounce.mark_dirty(now);
+        debounce.mark_git_changed(now + 1_000);
+        assert_eq!(churn_until_scan(&mut debounce, now + 1_100), now + 3_000);
+        // The build on its own keeps its backoff.
+        let next = now + 3_100;
+        assert_eq!(churn_until_scan(&mut debounce, next) - next, 30_000);
+    }
+
+    #[test]
+    fn retrying_a_failed_scan_doesnt_count_as_a_change() {
+        let mut debounce = SnapshotDebounce::default();
+        // An edit arrives while a scan runs, and then that scan fails.
+        debounce.mark_dirty(0);
+        debounce.retry_at(3_400);
+        assert!(debounce.take_if_due(500));
+        assert_eq!(churn_until_scan(&mut debounce, 1_000) - 1_000, 3_000);
+
+        // A retry alone neither raises nor lowers the backoff.
+        let now = churn_scans(&mut debounce, 10_000, 2);
+        debounce.retry_at(now);
+        assert!(debounce.take_if_due(now));
+        assert_eq!(
+            churn_until_scan(&mut debounce, now + 100) - (now + 100),
+            12_000
+        );
+    }
+
+    #[test]
+    fn a_build_doesnt_postpone_a_failed_scans_retry() {
+        let mut debounce = SnapshotDebounce::default();
+        let now = churn_scans(&mut debounce, 0, 4);
+        debounce.retry_at(now + 1_500);
+        assert_eq!(churn_until_scan(&mut debounce, now), now + 1_500);
+    }
+
+    #[test]
+    fn lost_integrity_with_only_a_retry_pending_rescans_at_once() {
+        let mut debounce = SnapshotDebounce::default();
+        debounce.retry_at(2_500);
+        debounce.mark_integrity_lost(1_000);
+        assert!(debounce.take_if_due(1_000));
+    }
+
     #[test]
     fn native_watcher_emits_a_working_tree_change() {
         let _watchdog =
