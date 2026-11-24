@@ -90,7 +90,7 @@ workspace, such as its pull request's number, on its card; `komla progress <labe
 under way, such as CI running, with a spinner; and `komla notify` says how the work ended:
 
 ```bash
-komla mark pr "PR #12" --tone info --tooltip "Fix the login redirect" --workspace "$id"
+komla mark pr "PR #12" --tone info --link https://github.com/org/repo/pull/12 --workspace "$id"
 komla progress "CI running" --tone info --tooltip "build 7 of 9" --workspace "$id"
 # The checks ended: clear the progress, unless another script has shown its own since, and say how.
 komla progress --clear "CI running" --workspace "$id"
@@ -114,8 +114,11 @@ tag it hides; the hover card shows them all, and the tag shows again once the ma
 digits, dots, dashes and underscores, such as `pr` or `deploy`, so scripts that use different keys
 never replace each other's markers, and `mark` with a key the workspace has replaces that marker
 in its place. A workspace has at most 5 markers besides its progress, and refuses another (`MARKERS_FULL`). `mark` takes
-`--tone` and `--tooltip` as `tag` does, and `--spinner` shows the marker as work under way. A
-marker is saved with its workspace, but one with a spinner isn't: it ends when Komla quits.
+`--tone` and `--tooltip` as `tag` does, `--link` an `http://` or `https://` page that clicking the
+marker opens, as `status set --link` does, and `--spinner` shows the marker as work under way. A
+marker is saved with its workspace, but one with a spinner isn't: it ends when Komla quits. That
+sets it apart from `komla status set`, whose item shows in the status bar while the workspace is
+open and is gone when Komla quits.
 `komla unmark <key>` takes the marker off; `--if <label>`, on `mark` or `unmark`, changes only a
 marker that still shows that label, so a script that finishes late leaves alone a marker another
 run put on since. `komla unmark --all` takes every marker off, progress too, and leaves the tag be;
@@ -662,7 +665,7 @@ Spawn an AI coding agent in a new isolated Komla workspace. Branches from the pr
 
 #### `set_status_item`
 
-Show a short status in Komla's status bar while the calling workspace is open, such as test results, a build or deploy state, or the pull request for the work. `komla status set <id> <text>` and `komla status clear [id]` are the CLI forms. Setting an id again replaces its item. Items live until Komla quits; a workspace shows at most 20.
+Show a short status in Komla's status bar while the calling workspace is open, such as test results, a build or deploy state, or the pull request for the work. `komla status set <id> <text>` and `komla status clear [id]` are the CLI forms. Setting an id again replaces its item. Items live until Komla quits; a workspace shows at most 20. For something that stays on the workspace's card, saved with it, use `komla mark`.
 
 | Parameter         | Required | Description                                                                               |
 | ----------------- | -------- | ----------------------------------------------------------------------------------------- |

@@ -363,6 +363,13 @@ export const komlaOperationSchema = z.discriminatedUnion('type', [
       label: workspaceTagNameSchema.optional(),
       tooltip: z.string().trim().min(1).max(MAX_WORKSPACE_TAG_TOOLTIP).optional(),
       tone: z.enum(WORKSPACE_TAG_TONES).optional(),
+      link: z
+        .string()
+        .trim()
+        .min(1)
+        .max(MAX_BROWSER_URL_LENGTH)
+        .optional()
+        .describe('An HTTP or HTTPS page clicking the marker opens, such as its pull request.'),
       spinner: z
         .boolean()
         .optional()
@@ -373,7 +380,7 @@ export const komlaOperationSchema = z.discriminatedUnion('type', [
     })
     .strict()
     .describe(
-      "Shows text on the workspace's card, such as a pull request's number, under `key`, replacing the marker of that key, or takes it off without `label`, which `tone`, `tooltip` and `spinner` need. With `all` in place of `key`, takes every marker off. It isn't a tag: it never joins the user's list or a filter. A marker is saved with the workspace, except one with a spinner."
+      "Shows text on the workspace's card, such as a pull request's number, under `key`, replacing the marker of that key, or takes it off without `label`, which `tone`, `tooltip`, `link` and `spinner` need. With `all` in place of `key`, takes every marker off. It isn't a tag: it never joins the user's list or a filter. A marker is saved with the workspace, except one with a spinner."
     ),
   z
     .object({

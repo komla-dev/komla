@@ -377,7 +377,9 @@ page, a setting and a status item that opens the panel.
 
 When the user asks to see something in the status bar only while you work, such as test progress,
 use `komla status set` instead of the file. Its item lasts until Komla quits; `komla status set
---help` lists its options.
+--help` lists its options. For something that should stay on the workspace's card instead, such as
+its pull request, use `komla mark`: a marker is saved with the workspace, and `--link` makes it
+open a page.
 
 ```sh
 komla status set tests "142/150 passing" --tone warning

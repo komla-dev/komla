@@ -75,7 +75,7 @@ export function WorkspaceInfoCardContent({
           </div>
         )}
         {/* Here too, as a notification or a busy agent takes their place on the card. */}
-        <WorkspaceMarkerList markers={workspace.markers} />
+        <WorkspaceMarkerList markers={workspace.markers} workspaceId={workspace.id} />
         {workspace.tag && (
           <div className="mt-2 flex min-w-0 items-baseline gap-1.5 text-xs">
             <WorkspaceTagBadge

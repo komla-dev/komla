@@ -141,10 +141,13 @@ function RowStatus({
   workspace,
   displayTitle,
   searchQuery,
+  opensLinks,
 }: {
   workspace: Workspace;
   displayTitle: string;
   searchQuery: string | null | undefined;
+  /** False while a click on the row picks it, or in the Trash. */
+  opensLinks: boolean;
 }) {
   const showAgentSpinner = useConfigStore((state) => state.config?.showAgentSpinner) !== false;
   const { attention, attentionAppearance } = rowAttention(workspace);
@@ -228,7 +231,7 @@ function RowStatus({
     <div className="flex min-w-0 items-center gap-3">
       <span className={STATE_SLOT_CLASS}>
         {/* A marker, work under way first, shows in the tag's place, as a spinning tag did. */}
-        <WorkspaceMarkerOrTag workspace={workspace} className="max-w-40" />
+        <WorkspaceMarkerOrTag workspace={workspace} opensLinks={opensLinks} className="max-w-40" />
       </span>
       <IdleRowStatus
         workspace={workspace}
@@ -719,7 +722,12 @@ export function DashboardRow({
         </TooltipContent>
       </Tooltip>
 
-      <RowStatus workspace={workspace} displayTitle={displayTitle} searchQuery={searchQuery} />
+      <RowStatus
+        workspace={workspace}
+        displayTitle={displayTitle}
+        searchQuery={searchQuery}
+        opensLinks={!selectionMode && workspace.status !== 'trashed'}
+      />
 
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
         {workspace.workingDirectory && branchName && (

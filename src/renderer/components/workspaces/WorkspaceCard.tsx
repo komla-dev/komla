@@ -470,6 +470,7 @@ export const WorkspaceCard = React.memo(function WorkspaceCard({
       otherAgents={otherAgents}
       restarting={isRestarting}
       workspace={workspace}
+      opensLinks={!selectionMode && !inTrash}
     />
   );
 
@@ -1186,6 +1187,7 @@ function TitleAdornment({
   otherAgents,
   restarting,
   workspace,
+  opensLinks,
 }: {
   attention: WorkspaceAttention | undefined;
   attentionAppearance: AttentionAppearance;
@@ -1197,7 +1199,9 @@ function TitleAdornment({
    * Its marker or tag shows in the badge's place when no agent has anything to show; its work
    * under way keeps a spinner beside the badge otherwise.
    */
-  workspace?: Pick<Workspace, 'markers' | 'tag' | 'tagSource' | 'tagTooltip'>;
+  workspace?: Pick<Workspace, 'id' | 'markers' | 'tag' | 'tagSource' | 'tagTooltip'>;
+  /** False while a click on the card picks it, or restores it from the Trash. */
+  opensLinks?: boolean;
 }) {
   const states = stateCounts(collapsed, otherAgents, restarting);
   const workingCommands = otherAgents.filter(
@@ -1226,7 +1230,11 @@ function TitleAdornment({
   if (!badge && states.length === 0) {
     // Half the row at most: a tag runs longer than an agent's badge, and the title comes first.
     return workspace ? (
-      <WorkspaceMarkerOrTag workspace={workspace} className="ml-auto max-w-[50%]" />
+      <WorkspaceMarkerOrTag
+        workspace={workspace}
+        opensLinks={opensLinks}
+        className="ml-auto max-w-[50%]"
+      />
     ) : null;
   }
 

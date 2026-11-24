@@ -277,7 +277,7 @@ export interface WorkspaceProgressRequest {
   ifLabel?: string;
 }
 
-/** Shows text on the workspace's card, such as a pull request's number, under `key`, replacing the marker of that key, or takes it off without `label`, which `tone`, `tooltip` and `spinner` need. With `all` in place of `key`, takes every marker off. It isn't a tag: it never joins the user's list or a filter. A marker is saved with the workspace, except one with a spinner. */
+/** Shows text on the workspace's card, such as a pull request's number, under `key`, replacing the marker of that key, or takes it off without `label`, which `tone`, `tooltip`, `link` and `spinner` need. With `all` in place of `key`, takes every marker off. It isn't a tag: it never joins the user's list or a filter. A marker is saved with the workspace, except one with a spinner. */
 export interface WorkspaceMarkRequest {
   type: 'workspace.mark';
   /**
@@ -298,6 +298,12 @@ export interface WorkspaceMarkRequest {
    */
   tooltip?: string;
   tone?: 'neutral' | 'info' | 'attention' | 'success' | 'warning' | 'error';
+  /**
+   * An HTTP or HTTPS page clicking the marker opens, such as its pull request.
+   * @minLength 1
+   * @maxLength 2048
+   */
+  link?: string;
   /** Shows the marker as work under way, which ends with Komla. */
   spinner?: boolean;
   /**

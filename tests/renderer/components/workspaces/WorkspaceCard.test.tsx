@@ -117,6 +117,12 @@ const fileViewerState = {
   openInlineFilePreview: vi.fn(),
 };
 
+const { openLinkExternally } = vi.hoisted(() => ({ openLinkExternally: vi.fn() }));
+vi.mock('../../../../src/renderer/lib/open-terminal-url', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  openLinkExternally,
+}));
+
 vi.mock('../../../../src/renderer/stores/file-viewer.store', () => ({
   useFileViewerStore: Object.assign(
     <T,>(selector?: (state: typeof fileViewerState) => T) =>
@@ -1314,6 +1320,68 @@ describe('WorkspaceCard', () => {
     expect(document.querySelector('[data-workspace-progress]')).toBeNull();
     expect(document.querySelector('[data-workspace-tag]')).toBeNull();
     expect(document.querySelector('[data-workspace-more-markers]')).toBeNull();
+  });
+
+  it("opens a marker's link from the card and the hover card, without opening the workspace", async () => {
+    const link = 'https://github.com/org/repo/pull/12';
+    const workspace = createWorktreeWorkspace({
+      markers: [{ key: 'pr', label: 'PR #12', tone: 'info', link }],
+    });
+    render(<WorkspaceCard workspace={workspace} />);
+    // The card's details button holds it, so it's no button of its own, and Enter opens the details.
+    const pill = document.querySelector('[data-workspace-marker="pr"]') as HTMLElement;
+    expect(pill.tagName).toBe('SPAN');
+    expect(pill.closest('button')).toHaveAccessibleName(/^Workspace details for/);
+    expect(screen.getAllByTestId('tooltip-content').map((tip) => tip.textContent)).toContain(
+      'PR #12 · opens github.com'
+    );
+
+    // A press reaches the card, to drag it, and focus from it doesn't open the details as a key would.
+    const details = screen.getByRole('button', { name: /^Workspace details for/ });
+    expect(fireEvent.mouseDown(pill)).toBe(true);
+    fireEvent.pointerDown(pill);
+    fireEvent.focus(details);
+    expect(document.querySelector('[data-workspace-info-marker="pr"]')).toBeNull();
+    fireEvent.blur(details);
+    fireEvent.click(pill);
+    await waitFor(() =>
+      expect(openLinkExternally).toHaveBeenCalledWith(link, { workspaceId: workspace.id })
+    );
+    expect(workspacesState.selectWorkspace).not.toHaveBeenCalled();
+
+    // Cmd+click picks the card, as anywhere else on it.
+    openLinkExternally.mockClear();
+    fireEvent.click(pill, { metaKey: true });
+    expect(workspacesState.enterSelectionMode).toHaveBeenCalledWith(workspace.id);
+    expect(openLinkExternally).not.toHaveBeenCalled();
+
+    // The details list it as a button, for the keyboard.
+    fireEvent.focus(screen.getByRole('button', { name: /^Workspace details for/ }));
+    const listed = document.querySelector('[data-workspace-info-marker="pr"]') as HTMLElement;
+    expect(listed.tagName).toBe('BUTTON');
+    fireEvent.click(listed);
+    await waitFor(() =>
+      expect(openLinkExternally).toHaveBeenCalledWith(link, { workspaceId: workspace.id })
+    );
+  });
+
+  it("picks a card in selection mode on a click on its marker's link", () => {
+    workspacesState.selectionMode = true;
+    onTestFinished(() => {
+      workspacesState.selectionMode = false;
+    });
+    const workspace = createWorktreeWorkspace({
+      markers: [{ key: 'pr', label: 'PR #12', tone: 'info', link: 'https://example.com/pr/12' }],
+    });
+    render(<WorkspaceCard workspace={workspace} />);
+
+    fireEvent.click(document.querySelector('[data-workspace-marker="pr"]') as HTMLElement);
+    expect(workspacesState.toggleWorkspaceSelection).toHaveBeenCalledWith(workspace.id);
+    expect(openLinkExternally).not.toHaveBeenCalled();
+    // So its tooltip doesn't say a click opens the page.
+    expect(
+      screen.getAllByTestId('tooltip-content').map((tip) => tip.textContent)
+    ).toContain('PR #12');
   });
 
   it('shows the tag in its place again once the markers are gone', () => {

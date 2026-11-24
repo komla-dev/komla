@@ -102,17 +102,18 @@ const COMMANDS: &[Command] = &[
         summary: "Show anything else on its card, such as PR #12",
         description: &[
             "Shows a marker in the tag's place on the current workspace's card while no agent is busy there, such as \"PR #12\" or \"Waiting on design\", until it's taken off. It isn't a tag: it never joins the user's list or the sidebar's filters, and the workspace keeps its tag, which shows again once its markers are gone.",
-            "The key is your name for it, up to 40 letters, digits, dots, dashes and underscores, such as pr: marking a key again replaces its marker, and markers under other keys stay. A workspace has at most 5 besides its progress, whose key, progress, takes only a marker with --spinner. A marker is saved with the workspace, except one with --spinner, which ends when Komla quits. The user can also remove it from the card's menu.",
+            "The key is your name for it, up to 40 letters, digits, dots, dashes and underscores, such as pr: marking a key again replaces its marker, and markers under other keys stay. A workspace has at most 5 besides its progress, whose key, progress, takes only a marker with --spinner. A marker is saved with the workspace, except one with --spinner, which ends when Komla quits, while an item komla status set shows lives only in the status bar until Komla quits. The user can also remove it from the card's menu.",
         ],
         options: &[
             ("--tone <tone>", "neutral, info, attention, success, warning or error."),
             ("--tooltip <text>", "More on hover, until it changes."),
+            ("--link <url>", "An http:// or https:// page clicking it opens, such as its pull request."),
             ("--spinner", "Show it as work under way, as `komla progress` does."),
             ("--if <label>", "Change only a marker under that key that shows that label, so a script leaves alone one another run put on since."),
             JSON,
         ],
         examples: &[
-            "komla mark pr \"PR #12\" --tone info --tooltip \"Fix the login redirect\"",
+            "komla mark pr \"PR #12\" --tone info --link https://github.com/org/repo/pull/12",
             "komla unmark pr && komla notify \"PR #12 merged\" --color success",
         ],
     },
@@ -371,6 +372,7 @@ const COMMANDS: &[Command] = &[
         summary: "Show a short status in the status bar",
         description: &[
             "Shows a short status, such as test results, in Komla's status bar while the current workspace is open, until Komla quits. Setting an id again replaces it. The text can carry Nerd Font icons and terminal colors for parts of it.",
+            "For something that stays on the workspace's card, such as its pull request, use komla mark: a marker is saved with the workspace.",
         ],
         options: &[
             ("--tone <tone>", "A dot of success, warning, error or info."),

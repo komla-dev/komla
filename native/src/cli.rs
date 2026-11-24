@@ -1611,11 +1611,18 @@ without their tags or links."
                 .map(|value| label(&value, "--if", "a label", usage))
                 .transpose()?;
             let all = operation == "unmark" && take_flag(&mut options, "--all")?;
-            let (tooltip, tone, spinner) = if operation == "mark" {
+            let (tooltip, tone, link, spinner) = if operation == "mark" {
                 let (tooltip, tone) = tooltip_and_tone(&mut options)?;
-                (tooltip, tone, take_flag(&mut options, "--spinner")?)
+                let link = take_option(&mut options, "--link")?;
+                // Komla refuses it, so it mustn't wait on the host to be refused.
+                if let Some(link) = &link {
+                    if !(link.starts_with("http://") || link.starts_with("https://")) {
+                        bail!("--link must be an http:// or https:// URL");
+                    }
+                }
+                (tooltip, tone, link, take_flag(&mut options, "--spinner")?)
             } else {
-                (None, None, false)
+                (None, None, None, false)
             };
             if let Some(option) = options.iter().find(|option| option.starts_with("--")) {
                 bail!("{operation} doesn't take {option}; usage: {usage}");
@@ -1642,6 +1649,7 @@ without their tags or links."
                 request["label"] = json!(label(&rest.join(" "), "mark", "a label", usage)?);
                 insert_json_optional(&mut request, "tooltip", tooltip);
                 insert_json_optional(&mut request, "tone", tone);
+                insert_json_optional(&mut request, "link", link);
                 if spinner {
                     request["spinner"] = json!(true);
                 }
@@ -1771,7 +1779,7 @@ fn tooltip_and_tone(options: &mut Vec<String>) -> anyhow::Result<(Option<String>
     Ok((tooltip, tone))
 }
 
-const MARK_USAGE: &str = "komla mark <key> <label> [--tooltip <text>] [--tone <tone>] [--spinner] [--if <label>] [--json]";
+const MARK_USAGE: &str = "komla mark <key> <label> [--tooltip <text>] [--tone <tone>] [--link <url>] [--spinner] [--if <label>] [--json]";
 const UNMARK_USAGE: &str =
     "komla unmark <key> [--if <label>] [--json], or komla unmark --all [--json]";
 const PROGRESS_USAGE: &str = "komla progress <label> [--tooltip <text>] [--tone <tone>] [--if <label>] [--json], or komla progress --clear [<label>] [--json]";
@@ -5843,6 +5851,21 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
                 }),
             ),
             (
+                vec![
+                    "mark",
+                    "pr",
+                    "PR #12",
+                    "--link",
+                    "https://github.com/org/repo/pull/12",
+                ],
+                json!({
+                    "type": "workspace.mark",
+                    "key": "pr",
+                    "label": "PR #12",
+                    "link": "https://github.com/org/repo/pull/12",
+                }),
+            ),
+            (
                 vec!["unmark", "pr"],
                 json!({"type": "workspace.mark", "key": "pr"}),
             ),
@@ -5869,10 +5892,12 @@ KOMLA_COMPANION_INBOX=/remote/inbox\n-KOMLA_UNUSED\n",
             vec!["mark", "has space", "x"],
             vec!["mark", &too_long, "x"],
             vec!["mark", "pr", "x", "--tone", "purple"],
+            vec!["mark", "pr", "x", "--link", "file:///etc"],
             vec!["mark", "pr", "x", "--bogus"],
             vec!["unmark"],
             vec!["unmark", "pr", "PR #12"],
             vec!["unmark", "pr", "--tone", "info"],
+            vec!["unmark", "pr", "--link", "https://example.com"],
             vec!["unmark", "pr", "--if", " "],
             // Every marker only when asked by name.
             vec!["unmark", "--all", "pr"],

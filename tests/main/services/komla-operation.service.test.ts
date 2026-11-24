@@ -2309,6 +2309,33 @@ describe('KomlaOperationService', () => {
     expect(workspace.markers).toBeUndefined();
   });
 
+  it('saves a link on a marker, which only a web page may be', async () => {
+    let workspace: KomlaOperationWorkspace = { id: 'workspace-1' };
+    const service = new KomlaOperationService(
+      createDependencies({
+        findWorkspaceByTerminalId: () => workspace,
+        updateWorkspace: (_id, updates) => (workspace = { ...workspace, ...updates }),
+      })
+    );
+    const run = (operation: KomlaOperation) =>
+      service.execute({ terminalId: 'terminal-1' }, operation);
+    const link = 'https://github.com/org/repo/pull/12';
+
+    await run({ type: 'workspace.mark', key: 'pr', label: 'PR #12', tone: 'info', link });
+    expect(workspace.markers).toEqual([{ key: 'pr', label: 'PR #12', tone: 'info', link }]);
+    // Marking the key again without one drops it, as it does the tooltip.
+    await run({ type: 'workspace.mark', key: 'pr', label: 'PR #12 merged' });
+    expect(workspace.markers).toEqual([{ key: 'pr', label: 'PR #12 merged', tone: 'neutral' }]);
+
+    await expect(
+      run({ type: 'workspace.mark', key: 'pr', label: 'PR', link: 'file:///etc/passwd' })
+    ).rejects.toMatchObject({ code: 'INVALID_MARKER', statusCode: 400 });
+    await expect(run({ type: 'workspace.mark', key: 'pr', link })).rejects.toMatchObject({
+      code: 'INVALID_MARKER',
+    });
+    expect(workspace.markers).toEqual([{ key: 'pr', label: 'PR #12 merged', tone: 'neutral' }]);
+  });
+
   it('shows progress as the progress marker, which `komla mark` sees as any other', async () => {
     let workspace: KomlaOperationWorkspace = { id: 'workspace-1' };
     const service = new KomlaOperationService(

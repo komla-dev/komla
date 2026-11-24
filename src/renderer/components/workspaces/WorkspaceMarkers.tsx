@@ -1,6 +1,6 @@
-import { forwardRef, type ComponentPropsWithoutRef } from 'react';
+import { forwardRef, type ComponentPropsWithoutRef, type MouseEvent, type Ref } from 'react';
 
-import { Badge } from '@/components/ui/badge';
+import { Badge, badgeVariants } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
@@ -10,25 +10,126 @@ import { ActivitySpinner } from './activity-spinners';
 
 // No store here: the workspaces store imports the hover card that lists these.
 
-/** A marker in its color, led by a spinner while it shows work under way. */
-export const WorkspaceMarkerBadge = forwardRef<
-  HTMLSpanElement,
-  { marker: WorkspaceMarker } & Omit<ComponentPropsWithoutRef<typeof Badge>, 'tone' | 'variant'>
->(function WorkspaceMarkerBadge({ marker, className, ...props }, ref) {
-  return (
-    <Badge ref={ref} tone={marker.tone} variant="outline" className={className} {...props}>
-      {marker.spinner && <ActivitySpinner className="size-2.5 shrink-0" />}
-      <span className="truncate">{marker.label}</span>
-    </Badge>
-  );
-});
+/**
+ * Opens a marker's link in the default browser, through the SSH host's tunnel for a localhost one
+ * there. Loaded on the click, as the opener imports the workspaces store.
+ */
+function openMarkerLink(link: string, workspaceId: string): void {
+  import('@/lib/open-terminal-url')
+    .then(({ openLinkExternally }) => openLinkExternally(link, { workspaceId }))
+    .catch((error: unknown) => console.error('Could not open the marker link', error));
+}
 
-/** What a marker's tooltip says: its label, that it's under way if it is, and its script's note. */
-function MarkerTooltipText({ marker }: { marker: WorkspaceMarker }) {
+function linkHost(link: string): string {
+  try {
+    return new URL(link).host;
+  } catch {
+    return link;
+  }
+}
+
+type MarkerBadgeProps = { marker: WorkspaceMarker; workspaceId: string } & Omit<
+  ComponentPropsWithoutRef<typeof Badge>,
+  'tone' | 'variant'
+> & {
+    /**
+     * Its own button for the keyboard. On the card it isn't one, as the card's details button
+     * holds it: a click opens the link, and the keyboard opens the details, which list it as one.
+     */
+    asButton?: boolean;
+    /** False while a click on the card picks it or restores it, which a click here then does too. */
+    opensLink?: boolean;
+  };
+
+/**
+ * A marker in its color, led by a spinner while it shows work under way. A click on one with a
+ * link opens it and leaves the card it sits on alone, but a modifier click picks the card.
+ */
+export const WorkspaceMarkerBadge = forwardRef<HTMLElement, MarkerBadgeProps>(
+  function WorkspaceMarkerBadge(
+    { marker, workspaceId, asButton, opensLink = true, className, onClick, ...props },
+    ref
+  ) {
+    const content = (
+      <>
+        {marker.spinner && <ActivitySpinner className="size-2.5 shrink-0" />}
+        <span className="truncate">{marker.label}</span>
+      </>
+    );
+    const link = opensLink ? marker.link : undefined;
+    if (!link) {
+      return (
+        <Badge
+          ref={ref as Ref<HTMLSpanElement>}
+          tone={marker.tone}
+          variant="outline"
+          className={className}
+          onClick={onClick}
+          {...props}
+        >
+          {content}
+        </Badge>
+      );
+    }
+    // Only the click is the link's: a press still reaches the card, which drags it and tells the
+    // details button it holds that a pointer, not the keyboard, focused it.
+    const handlers = {
+      onClick: (event: MouseEvent<HTMLElement>) => {
+        // As the tooltip closes on a click.
+        onClick?.(event as MouseEvent<HTMLSpanElement>);
+        // On the card, Cmd, Ctrl and Shift pick it for a bulk action, as anywhere else on it.
+        if (!asButton && (event.metaKey || event.ctrlKey || event.shiftKey)) return;
+        event.stopPropagation();
+        openMarkerLink(link, workspaceId);
+      },
+    };
+    const linkClassName = cn(
+      badgeVariants({ tone: marker.tone, variant: 'outline' }),
+      'cursor-pointer hover:underline',
+      className
+    );
+    if (asButton) {
+      return (
+        <button
+          ref={ref as Ref<HTMLButtonElement>}
+          type="button"
+          className={cn(
+            linkClassName,
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+          )}
+          {...(props as ComponentPropsWithoutRef<'button'>)}
+          {...handlers}
+        >
+          {content}
+        </button>
+      );
+    }
+    return (
+      <span ref={ref as Ref<HTMLSpanElement>} className={linkClassName} {...props} {...handlers}>
+        {content}
+      </span>
+    );
+  }
+);
+
+/**
+ * What a marker's tooltip says: its label, that it's under way if it is, its script's note, and
+ * where its link goes.
+ */
+function MarkerTooltipText({
+  marker,
+  opensLink = true,
+}: {
+  marker: WorkspaceMarker;
+  opensLink?: boolean;
+}) {
   return (
     <>
       {marker.spinner ? `${marker.label}, under way` : marker.label}
       {marker.tooltip && <span className="text-muted-foreground"> · {marker.tooltip}</span>}
+      {marker.link && opensLink && (
+        <span className="text-muted-foreground"> · opens {linkHost(marker.link)}</span>
+      )}
     </>
   );
 }
@@ -36,9 +137,13 @@ function MarkerTooltipText({ marker }: { marker: WorkspaceMarker }) {
 /** One of a workspace's markers, as the card and the dashboard's row show it. */
 export function WorkspaceMarkerPill({
   marker,
+  workspaceId,
+  opensLink,
   className,
 }: {
   marker: WorkspaceMarker;
+  workspaceId: string;
+  opensLink?: boolean;
   className?: string;
 }) {
   return (
@@ -48,11 +153,13 @@ export function WorkspaceMarkerPill({
           data-workspace-marker={marker.key}
           {...(marker.spinner && { 'data-workspace-progress': '' })}
           marker={marker}
+          workspaceId={workspaceId}
+          opensLink={opensLink}
           className={cn('max-w-32', className)}
         />
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-sm">
-        <MarkerTooltipText marker={marker} />
+        <MarkerTooltipText marker={marker} opensLink={opensLink} />
       </TooltipContent>
     </Tooltip>
   );
@@ -104,13 +211,21 @@ export function HiddenMarks({ labels }: { labels: string[] }) {
 }
 
 /** Every marker, with what its script says, as the hover card lists them. */
-export function WorkspaceMarkerList({ markers }: { markers: WorkspaceMarker[] | undefined }) {
+export function WorkspaceMarkerList({
+  markers,
+  workspaceId,
+}: {
+  markers: WorkspaceMarker[] | undefined;
+  workspaceId: string;
+}) {
   return shownWorkspaceMarkers(markers).map((marker) => (
     <div key={marker.key} className="mt-2 flex min-w-0 items-baseline gap-1.5 text-xs">
       <WorkspaceMarkerBadge
         data-workspace-info-marker={marker.key}
         {...(marker.spinner && { 'data-workspace-info-progress': '' })}
         marker={marker}
+        workspaceId={workspaceId}
+        asButton
         className="max-w-full shrink-0"
       />
       {marker.tooltip && (

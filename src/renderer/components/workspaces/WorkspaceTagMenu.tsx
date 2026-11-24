@@ -278,9 +278,12 @@ export function WorkspaceTagPill({
  */
 export function WorkspaceMarkerOrTag({
   workspace,
+  opensLinks = true,
   className,
 }: {
-  workspace: Pick<Workspace, 'markers' | 'tag' | 'tagSource' | 'tagTooltip'>;
+  workspace: Pick<Workspace, 'id' | 'markers' | 'tag' | 'tagSource' | 'tagTooltip'>;
+  /** False while a click on the card or row picks it, or restores it from the Trash. */
+  opensLinks?: boolean;
   className?: string;
 }) {
   const [first, ...rest] = shownWorkspaceMarkers(workspace.markers);
@@ -297,7 +300,12 @@ export function WorkspaceMarkerOrTag({
   const hidden = [...rest.map((marker) => marker.label), ...(workspace.tag ? [workspace.tag] : [])];
   return (
     <span className={cn('flex min-w-0 items-center gap-1', className)}>
-      <WorkspaceMarkerPill marker={first} className="min-w-0 shrink" />
+      <WorkspaceMarkerPill
+        marker={first}
+        workspaceId={workspace.id}
+        opensLink={opensLinks}
+        className="min-w-0 shrink"
+      />
       <HiddenMarks labels={hidden} />
     </span>
   );

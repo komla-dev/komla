@@ -47,6 +47,7 @@ describe('sameWorkspaceMarkers', () => {
     expect(sameWorkspaceMarkers([pr, ci], [{ ...pr }, { ...ci }])).toBe(true);
     expect(sameWorkspaceMarkers([pr, ci], [ci, pr])).toBe(false);
     expect(sameWorkspaceMarkers([pr], [{ ...pr, tooltip: 'why' }])).toBe(false);
+    expect(sameWorkspaceMarkers([pr], [{ ...pr, link: 'https://example.com/pr/12' }])).toBe(false);
   });
 });
 
@@ -69,6 +70,16 @@ describe('normalizePersistedWorkspaceMarkers', () => {
         label: 'M',
         tone: 'neutral',
       })),
+    ]);
+    // A link Komla saved is a web page's; a hand-edited one that isn't goes, and the marker stays.
+    expect(
+      normalizePersistedWorkspaceMarkers([
+        { key: 'pr', label: 'PR #12', tone: 'info', link: 'https://example.com/pr/12' },
+        { key: 'doc', label: 'Spec', link: 'javascript:alert(1)' },
+      ])
+    ).toEqual([
+      { key: 'pr', label: 'PR #12', tone: 'info', link: 'https://example.com/pr/12' },
+      { key: 'doc', label: 'Spec', tone: 'neutral' },
     ]);
     expect(normalizePersistedWorkspaceMarkers('pr')).toBeUndefined();
     expect(normalizePersistedWorkspaceMarkers([])).toBeUndefined();

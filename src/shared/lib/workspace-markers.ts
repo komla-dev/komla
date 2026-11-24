@@ -1,5 +1,6 @@
 import { STATUS_ITEM_ID_PATTERN } from '../types/status-items';
 
+import { isBrowserUrl } from './browser-tabs';
 import {
   MAX_WORKSPACE_TAG_TOOLTIP,
   normalizeWorkspaceTagName,
@@ -25,6 +26,8 @@ export interface WorkspaceMarker {
   tone: WorkspaceTagTone;
   /** What the script says about it, shown on hover. */
   tooltip?: string;
+  /** A web page clicking it opens, such as its pull request. */
+  link?: string;
   /** Work under way, such as CI running: Workspace Progress. */
   spinner?: true;
 }
@@ -110,6 +113,7 @@ function sameWorkspaceMarker(a: WorkspaceMarker, b: WorkspaceMarker): boolean {
     a.label === b.label &&
     a.tone === b.tone &&
     a.tooltip === b.tooltip &&
+    a.link === b.link &&
     a.spinner === b.spinner
   );
 }
@@ -149,7 +153,7 @@ export function normalizePersistedWorkspaceMarkers(raw: unknown): WorkspaceMarke
 /** One saved marker, or `undefined` for one Komla wouldn't have saved. */
 function persistedWorkspaceMarker(entry: unknown): WorkspaceMarker | undefined {
   if (!entry || typeof entry !== 'object') return undefined;
-  const { key, label, tone, tooltip } = entry as Record<string, unknown>;
+  const { key, label, tone, tooltip, link } = entry as Record<string, unknown>;
   if (typeof key !== 'string' || !WORKSPACE_MARKER_KEY_PATTERN.test(key)) return undefined;
   // Progress ends with Komla, so a saved one is a hand-edited file's.
   if (key === PROGRESS_MARKER_KEY) return undefined;
@@ -163,6 +167,7 @@ function persistedWorkspaceMarker(entry: unknown): WorkspaceMarker | undefined {
       ? (tone as WorkspaceTagTone)
       : 'neutral',
     ...(text && { tooltip: text }),
+    ...(typeof link === 'string' && isBrowserUrl(link) && { link }),
   };
 }
 

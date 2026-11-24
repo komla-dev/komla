@@ -200,6 +200,28 @@ function checkStatusItemClick(
   }
 }
 
+/** What a marker shows besides its label: only with a label, and a link only to a web page. */
+function checkMarkerLook(
+  label: string | undefined,
+  { tone, tooltip, link, spinner }: Extract<KomlaOperation, { type: 'workspace.mark' }>
+): void {
+  // Without a label it takes the marker off, which a look meant for it would hide.
+  if (!label && (spinner || [tone, tooltip, link].some((value) => value !== undefined))) {
+    throw new KomlaOperationError(
+      'INVALID_MARKER',
+      'Name the marker the tone, tooltip, link or spinner is for.',
+      400
+    );
+  }
+  if (link !== undefined && !isBrowserUrl(link)) {
+    throw new KomlaOperationError(
+      'INVALID_MARKER',
+      'Marker links must be HTTP or HTTPS URLs.',
+      400
+    );
+  }
+}
+
 /** Where the user lets agents start a launch mode, for an agent to pass on. */
 function letAgentsStartHint(preset: Pick<AgentPreset, 'name'>): string {
   return `To let agents start it, they can edit ${preset.name} in Settings → Agents, pick where agents may start it from the robot button beside the mode and save.`;
@@ -579,6 +601,8 @@ export type KomlaOperation =
       label?: string;
       tooltip?: string;
       tone?: WorkspaceTagTone;
+      /** An HTTP or HTTPS page clicking the marker opens. */
+      link?: string;
       spinner?: boolean;
       ifLabel?: string;
     }
@@ -1231,7 +1255,7 @@ export class KomlaOperationService {
     const workspace = this.requireWorkspace(context);
     // A key left out never means every marker: a script asks for that by name.
     if (operation.all) return this.clearMarkers(workspace, operation);
-    const { key, label: input, tooltip, tone, spinner, ifLabel } = operation;
+    const { key, label: input, tooltip, tone, link, spinner, ifLabel } = operation;
     if (key === undefined) {
       throw new KomlaOperationError(
         'INVALID_MARKER',
@@ -1243,14 +1267,7 @@ export class KomlaOperationService {
     if (input !== undefined && !label) {
       throw new KomlaOperationError('INVALID_MARKER', 'Name the marker.', 400);
     }
-    // Without a label it takes the marker off, which a look meant for it would hide.
-    if (!label && (tone !== undefined || tooltip !== undefined || spinner)) {
-      throw new KomlaOperationError(
-        'INVALID_MARKER',
-        'Name the marker the tone, tooltip or spinner is for.',
-        400
-      );
-    }
+    checkMarkerLook(label, operation);
     // Progress is work under way, which ends with Komla: a marker that stays takes another key.
     if (key === PROGRESS_MARKER_KEY && label && !spinner) {
       throw new KomlaOperationError(
@@ -1272,7 +1289,7 @@ export class KomlaOperationService {
       marker: this.applyMarker(
         workspace,
         key,
-        label ? { label, tone, tooltip, spinner } : undefined
+        label ? { label, tone, tooltip, link, spinner } : undefined
       ),
     };
   }
@@ -1285,12 +1302,13 @@ export class KomlaOperationService {
       label,
       tooltip,
       tone,
+      link,
       spinner,
       ifLabel,
     }: Extract<KomlaOperation, { type: 'workspace.mark' }>
   ): KomlaOperationResults['workspace.mark'] {
     // `spinner: false`, as a client that sends its defaults does, asks for no look.
-    const others = [key, label, tooltip, tone, ifLabel].some((value) => value !== undefined);
+    const others = [key, label, tooltip, tone, link, ifLabel].some((value) => value !== undefined);
     if (others || spinner) {
       throw new KomlaOperationError(
         'INVALID_MARKER',
@@ -1309,7 +1327,13 @@ export class KomlaOperationService {
     workspace: KomlaOperationWorkspace,
     key: string,
     shown:
-      | { label: string; tone?: WorkspaceTagTone; tooltip?: string; spinner?: boolean }
+      | {
+          label: string;
+          tone?: WorkspaceTagTone;
+          tooltip?: string;
+          link?: string;
+          spinner?: boolean;
+        }
       | undefined
   ): MarkerResult {
     if (!shown) {
@@ -1321,7 +1345,7 @@ export class KomlaOperationService {
       }
       return { workspaceId: workspace.id, key, label: null, changed: shownBefore };
     }
-    const { label, tone, tooltip, spinner } = shown;
+    const { label, tone, tooltip, link, spinner } = shown;
     // Progress has its own place, so `komla progress` shows whatever other scripts marked.
     const others = (workspace.markers ?? []).filter((marker) => marker.key !== PROGRESS_MARKER_KEY);
     if (
@@ -1340,6 +1364,7 @@ export class KomlaOperationService {
       label,
       tone: tone ?? 'neutral',
       ...(tooltip && { tooltip }),
+      ...(link && { link }),
       ...(spinner && { spinner: true as const }),
     };
     this.updateAndPublish(workspace.id, {
