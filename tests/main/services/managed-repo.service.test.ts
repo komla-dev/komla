@@ -74,9 +74,6 @@ describe('ManagedRepoService', () => {
     const repoPath = await managedRepoService.createManagedRepo('/src/repo', 'my project');
 
     expect(repoPath).toBe(repoPathOf('my-project', '.git'));
-    expect(mockFs.mkdirSync).toHaveBeenCalledWith(repoPathOf('my-project'), {
-      recursive: true,
-    });
     expect(mockGitService.cloneBare).toHaveBeenCalledWith(
       '/src/repo',
       repoPathOf('my-project', '.git')
@@ -182,6 +179,27 @@ describe('ManagedRepoService', () => {
     });
   });
 
+  it("deletes a project's folder even when its bare repo is already gone", async () => {
+    const { managedRepoService } = await import('../../../src/main/services/managed-repo.service');
+    mockFs.existsSync.mockImplementation((p: string) => p === repoPathOf('proj-a'));
+
+    await managedRepoService.deleteManagedRepo(repoPathOf('proj-a', '.git'));
+
+    expect(mockFs.rmSync).toHaveBeenCalledWith(repoPathOf('proj-a'), {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it('leaves a folder outside repos/ alone when its bare repo is gone', async () => {
+    const { managedRepoService } = await import('../../../src/main/services/managed-repo.service');
+    mockFs.existsSync.mockImplementation((p: string) => p === join('/elsewhere', 'proj-a'));
+
+    await managedRepoService.deleteManagedRepo(join('/elsewhere', 'proj-a', '.git'));
+
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+  });
+
   it('returns zeroed remote status when origin remote does not exist', async () => {
     const { managedRepoService } = await import('../../../src/main/services/managed-repo.service');
     mockGitService.hasRemote.mockResolvedValue(false);
@@ -213,9 +231,6 @@ describe('ManagedRepoService', () => {
     );
 
     expect(repoPath).toBe(repoPathOf('remote-project', '.git'));
-    expect(mockFs.mkdirSync).toHaveBeenCalledWith(repoPathOf('remote-project'), {
-      recursive: true,
-    });
     expect(mockGitService.cloneBareFromRemote).toHaveBeenCalledWith(
       'https://github.com/org/remote.git',
       repoPathOf('remote-project', '.git'),
@@ -289,7 +304,7 @@ describe('ManagedRepoService', () => {
       expect(path1).toBe(path2);
     });
 
-    it('reuses a folder without a marker, such as one left by an interrupted create', async () => {
+    it('keeps a folder without a marker at the path of the project it is named for', async () => {
       const { managedRepoService } =
         await import('../../../src/main/services/managed-repo.service');
 

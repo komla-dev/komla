@@ -1,4 +1,4 @@
-import { resolve } from 'path';
+import { join, resolve } from 'path';
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -1036,20 +1036,188 @@ describe('ProjectService', () => {
     expect(project.autoPushAfterMerge).toBe(false);
   });
 
-  it('cleans up orphaned folder and allows create() to proceed', async () => {
-    // Simulate an orphaned folder on disk (no project references it)
-    vfs.mock.mkdirSync('/mock/home/.komla/repos/repo-name');
+  describe('the project folder Komla makes under repos/', () => {
+    const folder = '/mock/home/.komla/repos/repo-name';
+    const userFile = `${folder}/.git/HEAD`;
+    const inProgressMarker = `${folder}/.komla-creating`;
 
-    const { projectService } = await import('../../../src/main/services/project.service');
+    type Service = typeof import('../../../src/main/services/project.service').projectService;
+    // Each create path, made to create the project the user named "repo-name", and a way to make it fail
+    // once the clone or new repository is in the folder.
+    const createPaths: Array<[string, (service: Service) => Promise<unknown>, () => void]> = [
+      [
+        'create()',
+        (service) => service.create({ repositoryPath: '/repo/path', name: 'repo-name' }),
+        () =>
+          mockManagedRepoService.createManagedRepo.mockImplementationOnce(async () => {
+            vfs.mock.writeFileSync(`${folder}/.git/HEAD`, 'ref: refs/heads/main\n');
+            throw new Error('could not set origin');
+          }),
+      ],
+      [
+        'createFromRemote()',
+        (service) =>
+          service.createFromRemote({
+            remoteUrl: 'https://github.com/org/repo-name.git',
+            name: 'repo-name',
+          }),
+        () =>
+          mockManagedRepoService.createManagedRepoFromRemote.mockImplementationOnce(async () => {
+            vfs.mock.writeFileSync(`${folder}/.git/HEAD`, 'ref: refs/heads/main\n');
+            throw new Error('could not set origin');
+          }),
+      ],
+      [
+        'createFromNew()',
+        (service) => service.createFromNew({ name: 'repo-name' }),
+        () =>
+          mockGitService.initBareRepo.mockImplementationOnce(async () => {
+            vfs.mock.writeFileSync(`${folder}/.git/HEAD`, 'ref: refs/heads/main\n');
+            throw new Error('could not set origin');
+          }),
+      ],
+    ];
 
-    const project = await projectService.create({ repositoryPath: '/repo/path' });
+    describe.each(createPaths)('%s', (_label, createProject, failAfterCloning) => {
+      it('refuses a folder already there that Komla did not make, leaving it untouched', async () => {
+        vfs.mock.writeFileSync(userFile, 'ref: refs/heads/main\n');
+        const { projectService } = await import('../../../src/main/services/project.service');
 
-    // Orphaned folder should have been cleaned up
-    expect(vfs.mock.rmSync).toHaveBeenCalledWith('/mock/home/.komla/repos/repo-name', {
-      recursive: true,
-      force: true,
+        await expect(createProject(projectService)).rejects.toThrow(
+          `A folder already exists at ${folder}. Choose another name, or remove the folder.`
+        );
+
+        expect(vfs.mock.rmSync).not.toHaveBeenCalled();
+        expect(vfs.mock.existsSync(userFile)).toBe(true);
+        expect(projectService.list()).toEqual([]);
+        expect(mockManagedRepoService.createManagedRepo).not.toHaveBeenCalled();
+        expect(mockManagedRepoService.createManagedRepoFromRemote).not.toHaveBeenCalled();
+        expect(mockGitService.initBareRepo).not.toHaveBeenCalled();
+      });
+
+      it('replaces the leftover of an earlier attempt that never finished', async () => {
+        vfs.mock.writeFileSync(inProgressMarker, '');
+        vfs.mock.writeFileSync(`${folder}/.git/objects/pack/partial.pack`, 'partial');
+        const { projectService } = await import('../../../src/main/services/project.service');
+
+        const project = await createProject(projectService);
+
+        expect(vfs.mock.rmSync).toHaveBeenCalledWith(folder, {
+          recursive: true,
+          force: true,
+        });
+        expect(project.name).toBe('repo-name');
+        // A finished project folder no longer reads as a leftover.
+        expect(vfs.mock.existsSync(inProgressMarker)).toBe(false);
+      });
+
+      it('removes only the folder it made when a step after cloning fails', async () => {
+        failAfterCloning();
+        const { projectService } = await import('../../../src/main/services/project.service');
+
+        await expect(createProject(projectService)).rejects.toThrow('could not set origin');
+
+        expect(vfs.mock.rmSync).toHaveBeenCalledTimes(1);
+        expect(vfs.mock.rmSync).toHaveBeenCalledWith(folder, { recursive: true, force: true });
+        expect(vfs.mock.existsSync(folder)).toBe(false);
+        expect(projectService.list()).toEqual([]);
+      });
+
+      it('reports the failure itself when removing its own folder fails too', async () => {
+        failAfterCloning();
+        vfs.mock.rmSync.mockImplementationOnce(() => {
+          throw Object.assign(new Error('EPERM, Permission denied'), { code: 'EPERM' });
+        });
+        const { projectService } = await import('../../../src/main/services/project.service');
+
+        await expect(createProject(projectService)).rejects.toThrow('could not set origin');
+      });
+
+      it('names the folder when a leftover of an earlier attempt cannot be removed', async () => {
+        vfs.mock.writeFileSync(inProgressMarker, '');
+        vfs.mock.rmSync.mockImplementationOnce(() => {
+          throw Object.assign(new Error('EPERM, Permission denied'), {
+            code: 'EPERM',
+          });
+        });
+        const { projectService } = await import('../../../src/main/services/project.service');
+
+        await expect(createProject(projectService)).rejects.toThrow(
+          `Komla couldn't remove the folder an earlier attempt left at ${folder} (EPERM, Permission denied). Remove it, or choose another name.`
+        );
+      });
     });
-    expect(project.name).toBe('repo-name');
+
+    it('names the project after its repository with a suffix when the folder is taken', async () => {
+      // Such as the first-run wizard, which has no name field to choose another name in.
+      vfs.mock.writeFileSync(userFile, 'ref: refs/heads/main\n');
+      const { projectService } = await import('../../../src/main/services/project.service');
+
+      const project = await projectService.create({ repositoryPath: '/repo/path' });
+
+      expect(project.name).toBe('repo-name-2');
+      expect(project.managedRepoPath).toBe('/mock/home/.komla/repos/repo-name-2/.git');
+      expect(vfs.mock.existsSync(userFile)).toBe(true);
+      expect(vfs.mock.rmSync).not.toHaveBeenCalledWith(folder, expect.anything());
+    });
+
+    it('refuses a taken folder for a name the user typed, rather than choosing another', async () => {
+      vfs.mock.writeFileSync(userFile, 'ref: refs/heads/main\n');
+      const { projectService } = await import('../../../src/main/services/project.service');
+
+      await expect(
+        projectService.create({ repositoryPath: '/repo/path', name: 'repo-name' })
+      ).rejects.toThrow(`A folder already exists at ${folder}`);
+    });
+
+    it('names the folder before marking it unfinished, so a leftover is found by its name', async () => {
+      const { projectService } = await import('../../../src/main/services/project.service');
+
+      await projectService.create({ repositoryPath: '/repo/path' });
+
+      const writes = vfs.mock.writeFileSync.mock.calls.map(([path]) => String(path));
+      const nameFile = writes.indexOf(join(folder, '.project-name'));
+      expect(nameFile).toBeGreaterThanOrEqual(0);
+      expect(nameFile).toBeLessThan(writes.indexOf(join(folder, '.komla-creating')));
+    });
+
+    it('keeps the folder marked unfinished when the project list could not be saved', async () => {
+      // The project is gone after a restart, so its folder must still read as a leftover.
+      const { projectService } = await import('../../../src/main/services/project.service');
+      mockWriteFileAtomicSync.mockImplementationOnce(() => {
+        throw new Error('disk full');
+      });
+
+      await projectService.create({ repositoryPath: '/repo/path' });
+
+      expect(vfs.mock.existsSync(inProgressMarker)).toBe(true);
+    });
+
+    it("never names a project after another project's folder, even one still marked unfinished", async () => {
+      const { projectService } = await import('../../../src/main/services/project.service');
+      const listed = await projectService.create({ repositoryPath: '/repo/path' });
+      await projectService.update(listed.id, { name: 'renamed' });
+      // Such as after a save failed while it was created.
+      vfs.mock.writeFileSync(inProgressMarker, '');
+
+      const project = await projectService.create({ repositoryPath: '/other/repo-name' });
+
+      expect(project.name).toBe('repo-name-2');
+      expect(vfs.mock.rmSync).not.toHaveBeenCalledWith(folder, expect.anything());
+    });
+
+    it("treats a finished project folder no project lists as the user's, not a leftover", async () => {
+      // Such as one copied over from another installation: it has the name marker every
+      // project folder has, but no attempt in progress.
+      vfs.mock.writeFileSync(`${folder}/.project-name`, 'repo-name');
+      vfs.mock.writeFileSync(userFile, 'ref: refs/heads/main\n');
+      const { projectService } = await import('../../../src/main/services/project.service');
+
+      await expect(
+        projectService.create({ repositoryPath: '/repo/path', name: 'repo-name' })
+      ).rejects.toThrow(`A folder already exists at ${folder}`);
+      expect(vfs.mock.rmSync).not.toHaveBeenCalled();
+    });
   });
 
   it('throws when create() targets a folder owned by an active project', async () => {

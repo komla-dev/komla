@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { useIconColors } from '@/hooks/useIconColors';
 import { useProjectIconCandidates } from '@/hooks/useProjectIconCandidates';
+import { ipcErrorMessage } from '@/lib/ipc-error-message';
 import { getNextAvailableColor, PROJECT_COLORS, resolvePickedColor } from '@/lib/project-colors';
 import { cn } from '@/lib/utils';
 import { useAgentPresetsStore } from '@/stores/agent-presets.store';
@@ -83,7 +84,7 @@ function LocalPathFields({
           {isCheckingDirectory
             ? 'Checking folder...'
             : directoryInfo?.isGit
-              ? 'Git repository detected. New workspaces will use isolated worktrees.'
+              ? 'Git repository detected. Komla adds its own bare clone of it and leaves this folder as it is; new workspaces use isolated worktrees.'
               : 'Checking folder...'}
         </p>
       )}
@@ -929,7 +930,7 @@ export function ProjectCreationForm({
       const project = await dispatchCreate();
       onSuccess(project);
     } catch (err) {
-      setProjectError((err as Error).message);
+      setProjectError(ipcErrorMessage(err));
       setCloneProgress(null);
     } finally {
       setIsCreating(false);

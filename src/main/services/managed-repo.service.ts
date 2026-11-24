@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { join, dirname, resolve } from 'path';
 
 import { createLogger } from '../lib/logger';
 import { removePathSync } from '../lib/remove-path';
@@ -76,8 +76,8 @@ class ManagedRepoService {
         // Marker unreadable, treat as collision
       }
     } else if (projectName === safeName) {
-      // No marker, such as a folder left by an interrupted create: it belongs to the
-      // project whose name matches the folder exactly.
+      // No marker: the folder is the path of the project whose name matches it exactly, so
+      // creating that project there reports the folder rather than quietly using another path.
       return basePath;
     }
 
@@ -98,7 +98,8 @@ class ManagedRepoService {
   }
 
   /**
-   * Create a managed bare clone of a local repository
+   * Create a managed bare clone of a local repository, in the project folder the caller made
+   * for it (see `ProjectService`).
    *
    * If the source repo has an 'origin' remote, the bare clone's 'origin'
    * will point to that remote URL. Otherwise, no remote is configured.
@@ -108,17 +109,7 @@ class ManagedRepoService {
    * @returns Path to the created bare clone
    */
   async createManagedRepo(sourcePath: string, projectName: string): Promise<string> {
-    const projectFolderPath = this.getProjectFolderPath(projectName);
     const managedRepoPath = this.getManagedRepoPath(projectName);
-
-    // Check if already exists
-    if (existsSync(projectFolderPath)) {
-      throw new Error(`Project folder already exists at ${projectFolderPath}`);
-    }
-
-    // Create project folder first
-    mkdirSync(projectFolderPath, { recursive: true });
-    writeFileSync(join(projectFolderPath, '.project-name'), projectName, 'utf-8');
 
     // Check if source repo has an origin remote with a real URL
     let originUrl: string | null = null;
@@ -217,7 +208,8 @@ class ManagedRepoService {
   }
 
   /**
-   * Create a managed bare clone directly from a remote URL
+   * Create a managed bare clone directly from a remote URL, in the project folder the caller
+   * made for it (see `ProjectService`).
    * The remote URL is kept as 'origin' (the true origin of the code)
    *
    * @param remoteUrl URL of the remote repository
@@ -230,17 +222,7 @@ class ManagedRepoService {
     projectName: string,
     onProgress?: GitProgressCallback
   ): Promise<string> {
-    const projectFolderPath = this.getProjectFolderPath(projectName);
     const managedRepoPath = this.getManagedRepoPath(projectName);
-
-    // Check if already exists
-    if (existsSync(projectFolderPath)) {
-      throw new Error(`Project folder already exists at ${projectFolderPath}`);
-    }
-
-    // Create project folder first
-    mkdirSync(projectFolderPath, { recursive: true });
-    writeFileSync(join(projectFolderPath, '.project-name'), projectName, 'utf-8');
 
     // Clone directly as bare from the remote URL into project folder
     // The 'origin' remote will point to the actual remote URL
@@ -265,11 +247,14 @@ class ManagedRepoService {
    * Deletes the entire project folder containing the bare repo.
    */
   async deleteManagedRepo(managedRepoPath: string): Promise<void> {
-    if (!existsSync(managedRepoPath)) {
+    const parentDir = dirname(managedRepoPath);
+    // A project folder under repos/ goes even when its bare repo is already gone: left behind, it
+    // would stop the project from being added again, since Komla never removes a folder it can't
+    // tell it made. Anywhere else, only a folder that still holds the bare repo is removed.
+    const isProjectFolder = resolve(dirname(parentDir)) === resolve(this.reposBasePath);
+    if (!existsSync(isProjectFolder ? parentDir : managedRepoPath)) {
       return;
     }
-
-    const parentDir = dirname(managedRepoPath);
     removePathSync(parentDir, { recursive: true, force: true });
   }
 

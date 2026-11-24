@@ -55,6 +55,17 @@ const PROJECT_MIGRATIONS: Record<
   (data: Record<string, unknown>) => Record<string, unknown>
 > = {};
 
+/**
+ * In a project folder while Komla creates the project, so a folder that has it is the leftover of
+ * an attempt that never finished, which only Komla wrote. `.project-name` can't tell that: every
+ * finished project folder has one, including one copied from another installation.
+ */
+const UNFINISHED_PROJECT_FOLDER_MARKER = '.komla-creating';
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // Empty projects file for fresh installs
 const DEFAULT_PROJECTS_FILE = { _version: PROJECT_VERSION, projects: [] as Project[] };
 const setupDestinations = new Set<string>(SETUP_DESTINATIONS);
@@ -223,16 +234,19 @@ class ProjectService {
     }
   }
 
-  private saveProjects(propagateError = false): void {
+  /** Returns whether the projects file was written. */
+  private saveProjects(propagateError = false): boolean {
     try {
       const projectsData = {
         _version: PROJECT_VERSION,
         projects: Array.from(this.projects.values()),
       };
       writeFileAtomicSync(this.projectsPath, JSON.stringify(projectsData, null, 2));
+      return true;
     } catch (error) {
       logger.error('Failed to save projects:', error);
       if (propagateError) throw error;
+      return false;
     }
   }
 
@@ -265,26 +279,71 @@ class ProjectService {
     }
   }
 
-  /**
-   * Check if a project folder is orphaned (exists on disk but no project references it).
-   * If orphaned, removes it and returns true. If owned by an active project, returns false.
-   */
-  private cleanupOrphanedFolder(projectFolderPath: string): boolean {
-    if (!existsSync(projectFolderPath)) return true;
-
-    const isOrphaned = !Array.from(this.projects.values()).some((p) => {
+  /** Whether a project Komla lists keeps its bare repo in this project folder. */
+  private isProjectFolderInUse(projectFolderPath: string): boolean {
+    return Array.from(this.projects.values()).some((p) => {
       if (!p.managed) return false;
       if (p.managedRepoPath && resolve(dirname(p.managedRepoPath)) === resolve(projectFolderPath)) {
         return true;
       }
       return resolve(p.repositoryPath) === resolve(projectFolderPath);
     });
-    if (isOrphaned) {
-      logger.info(`Cleaning up orphaned project folder: ${projectFolderPath}`);
-      removePathSync(projectFolderPath, { recursive: true, force: true });
-      return true;
+  }
+
+  /**
+   * Makes the project folder for this attempt to create `name`, marked unfinished until
+   * `finishProjectFolder`. A folder already there is removed only when it carries that mark,
+   * so only a Komla attempt that never finished: anything else may be the user's, so the
+   * attempt stops and names it, leaving the folder untouched.
+   */
+  private startProjectFolder(projectFolderPath: string, name: string): void {
+    if (existsSync(projectFolderPath)) {
+      if (!existsSync(join(projectFolderPath, UNFINISHED_PROJECT_FOLDER_MARKER))) {
+        throw new Error(
+          `A folder already exists at ${projectFolderPath}. Choose another name, or remove the folder.`
+        );
+      }
+      logger.info(`Removing the folder an unfinished project creation left: ${projectFolderPath}`);
+      try {
+        removePathSync(projectFolderPath, { recursive: true, force: true });
+      } catch (error) {
+        throw new Error(
+          `Komla couldn't remove the folder an earlier attempt left at ${projectFolderPath} (${errorMessage(error)}). Remove it, or choose another name.`
+        );
+      }
     }
-    return false;
+    mkdirSync(projectFolderPath, { recursive: true });
+    try {
+      // The name first: it is how `getProjectFolderPath` finds this folder again for a leftover.
+      writeFileSync(join(projectFolderPath, '.project-name'), name, 'utf-8');
+      writeFileSync(join(projectFolderPath, UNFINISHED_PROJECT_FOLDER_MARKER), '', 'utf-8');
+    } catch (error) {
+      this.removeUnfinishedProjectFolder(projectFolderPath);
+      throw error;
+    }
+  }
+
+  /** Marks the project folder as the saved project's, never again a leftover to remove. */
+  private finishProjectFolder(projectFolderPath: string): void {
+    try {
+      removePathSync(join(projectFolderPath, UNFINISHED_PROJECT_FOLDER_MARKER), { force: true });
+    } catch (error) {
+      // The project is saved, which is what keeps its folder safe from a later create.
+      logger.warn(`Failed to mark ${projectFolderPath} finished:`, error);
+    }
+  }
+
+  /**
+   * Removes the folder `startProjectFolder` made for an attempt that failed: everything in it is
+   * that attempt's. Leaves the attempt's own error to report if that fails too; the mark lets a
+   * later attempt remove what remains.
+   */
+  private removeUnfinishedProjectFolder(projectFolderPath: string): void {
+    try {
+      removePathSync(projectFolderPath, { recursive: true, force: true });
+    } catch (error) {
+      logger.warn(`Failed to remove the unfinished project folder ${projectFolderPath}:`, error);
+    }
   }
 
   /**
@@ -309,22 +368,29 @@ class ProjectService {
     );
   }
 
-  private getUniqueProjectName(baseName: string): string {
+  private getUniqueProjectName(
+    baseName: string,
+    isAvailable: (name: string) => boolean = (name) => !this.projectNameExists(name)
+  ): string {
     const trimmedBaseName = baseName.trim();
     if (!trimmedBaseName) {
       throw new Error('Project name is required');
     }
-    if (!this.projectNameExists(trimmedBaseName)) return trimmedBaseName;
+    if (isAvailable(trimmedBaseName)) return trimmedBaseName;
 
     for (let index = 2; index < 1000; index++) {
       const candidate = `${trimmedBaseName}-${index}`;
-      if (!this.projectNameExists(candidate)) return candidate;
+      if (isAvailable(candidate)) return candidate;
     }
 
     throw new Error(`Could not find an available project name for ${trimmedBaseName}`);
   }
 
-  private resolveProjectName(defaultName: string, requestedName?: string): string {
+  private resolveProjectName(
+    defaultName: string,
+    requestedName?: string,
+    isAvailable?: (name: string) => boolean
+  ): string {
     const trimmedRequestedName = requestedName?.trim();
     if (trimmedRequestedName) {
       if (this.projectNameExists(trimmedRequestedName)) {
@@ -332,7 +398,24 @@ class ProjectService {
       }
       return trimmedRequestedName;
     }
-    return this.getUniqueProjectName(defaultName);
+    return this.getUniqueProjectName(defaultName, isAvailable);
+  }
+
+  /**
+   * A git project's name: the one the user typed, or else the default, with a suffix when a
+   * project has it or a folder Komla wouldn't remove is at its path. The first-run wizard has no
+   * name field, so a taken folder mustn't leave the user with nothing to change.
+   */
+  private resolveGitProjectName(defaultName: string, requestedName?: string): string {
+    return this.resolveProjectName(defaultName, requestedName, (name) => {
+      if (this.projectNameExists(name)) return false;
+      const projectFolderPath = managedRepoService.getProjectFolderPath(name);
+      if (this.isProjectFolderInUse(projectFolderPath)) return false;
+      return (
+        !existsSync(projectFolderPath) ||
+        existsSync(join(projectFolderPath, UNFINISHED_PROJECT_FOLDER_MARKER))
+      );
+    });
   }
 
   // Public API
@@ -358,13 +441,10 @@ class ProjectService {
 
     // Auto-derive project name from git repo name unless caller provides a display name.
     const repoName = await gitService.getRepoName(params.repositoryPath);
-    const name = this.resolveProjectName(repoName, params.name);
+    const name = this.resolveGitProjectName(repoName, params.name);
 
-    // Get project folder path for cleanup
     const projectFolderPath = managedRepoService.getProjectFolderPath(name);
-
-    // Clean up orphaned folder or throw if an active project owns it
-    if (!this.cleanupOrphanedFolder(projectFolderPath)) {
+    if (this.isProjectFolderInUse(projectFolderPath)) {
       throw new Error(`Project already exists: ${name}`);
     }
 
@@ -387,7 +467,10 @@ class ProjectService {
       color = getNextAvailableColor(usedColors);
     }
 
+    let startedProjectFolder = false;
     try {
+      this.startProjectFolder(projectFolderPath, name);
+      startedProjectFolder = true;
       // Create managed bare clone
       // This allows worktrees on any branch including main/master
       const managedRepoPath = await managedRepoService.createManagedRepo(
@@ -420,13 +503,12 @@ class ProjectService {
       };
 
       this.projects.set(project.id, project);
-      this.saveProjects();
+      // Unsaved, the project is gone after a restart, so its folder stays a leftover.
+      if (this.saveProjects()) this.finishProjectFolder(projectFolderPath);
       return project;
     } catch (error) {
-      // Clean up on failure - delete entire project folder
-      if (existsSync(projectFolderPath)) {
-        removePathSync(projectFolderPath, { recursive: true, force: true });
-      }
+      // Remove only a folder this attempt made, never one that was already there.
+      if (startedProjectFolder) this.removeUnfinishedProjectFolder(projectFolderPath);
       throw error;
     } finally {
       this.releaseCreationLock(projectFolderPath);
@@ -833,21 +915,21 @@ class ProjectService {
     const match =
       params.remoteUrl.match(/\/([^/]+?)(\.git)?$/) || params.remoteUrl.match(/:([^/]+?)(\.git)?$/);
     const defaultName = match?.[1] || 'project';
-    const name = this.resolveProjectName(defaultName, params.name);
+    const name = this.resolveGitProjectName(defaultName, params.name);
 
     // Get project folder path (for template files)
     const projectFolderPath = managedRepoService.getProjectFolderPath(name);
-
-    // Clean up orphaned folder or throw if an active project owns it
-    if (!this.cleanupOrphanedFolder(projectFolderPath)) {
+    if (this.isProjectFolderInUse(projectFolderPath)) {
       throw new Error(`Project already exists: ${name}`);
     }
 
     this.acquireCreationLock(projectFolderPath);
 
+    let startedProjectFolder = false;
     try {
+      this.startProjectFolder(projectFolderPath, name);
+      startedProjectFolder = true;
       // Clone directly as bare repo to ~/.komla/repos/{name}/.git
-      // This creates the project folder structure automatically
       const managedRepoPath = await managedRepoService.createManagedRepoFromRemote(
         params.remoteUrl,
         name,
@@ -895,13 +977,12 @@ class ProjectService {
       };
 
       this.projects.set(project.id, project);
-      this.saveProjects();
+      // Unsaved, the project is gone after a restart, so its folder stays a leftover.
+      if (this.saveProjects()) this.finishProjectFolder(projectFolderPath);
       return project;
     } catch (error) {
-      // Clean up on failure - delete entire project folder
-      if (existsSync(projectFolderPath)) {
-        removePathSync(projectFolderPath, { recursive: true, force: true });
-      }
+      // Remove only a folder this attempt made, never one that was already there.
+      if (startedProjectFolder) this.removeUnfinishedProjectFolder(projectFolderPath);
       throw error;
     } finally {
       this.releaseCreationLock(projectFolderPath);
@@ -925,17 +1006,16 @@ class ProjectService {
     const projectFolderPath = managedRepoService.getProjectFolderPath(name);
     const managedRepoPath = managedRepoService.getManagedRepoPath(name);
 
-    // Clean up orphaned folder or throw if an active project owns it
-    if (!this.cleanupOrphanedFolder(projectFolderPath)) {
+    if (this.isProjectFolderInUse(projectFolderPath)) {
       throw new Error(`A project with this name already exists`);
     }
 
     this.acquireCreationLock(projectFolderPath);
 
-    // Create project folder
-    mkdirSync(projectFolderPath, { recursive: true });
-
+    let startedProjectFolder = false;
     try {
+      this.startProjectFolder(projectFolderPath, name);
+      startedProjectFolder = true;
       // Create bare repo inside project folder
       await gitService.initBareRepo(managedRepoPath);
 
@@ -979,13 +1059,12 @@ class ProjectService {
       };
 
       this.projects.set(project.id, project);
-      this.saveProjects();
+      // Unsaved, the project is gone after a restart, so its folder stays a leftover.
+      if (this.saveProjects()) this.finishProjectFolder(projectFolderPath);
       return project;
     } catch (error) {
-      // Clean up on failure - delete entire project folder
-      if (existsSync(projectFolderPath)) {
-        removePathSync(projectFolderPath, { recursive: true, force: true });
-      }
+      // Remove only a folder this attempt made, never one that was already there.
+      if (startedProjectFolder) this.removeUnfinishedProjectFolder(projectFolderPath);
       throw error;
     } finally {
       this.releaseCreationLock(projectFolderPath);

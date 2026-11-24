@@ -250,6 +250,38 @@ describe('ProjectCreationForm source controls', () => {
     expect(url).not.toHaveAttribute('aria-invalid', 'true');
   });
 
+  it("shows why adding failed in Komla's own words, without Electron's wrapping", async () => {
+    const user = userEvent.setup();
+    mocks.createProject
+      .mockReset()
+      .mockRejectedValue(
+        new Error(
+          "Error invoking remote method 'project:create': Error: A folder already exists at C:\\Users\\ada\\.komla\\repos\\app. Choose another name, or remove the folder."
+        )
+      );
+    render(<ProjectCreationForm onSuccess={vi.fn()} compact hideAdvanced hideProjectColor />);
+
+    await user.click(screen.getByRole('button', { name: /Browse for folder/ }));
+    await user.click(await screen.findByRole('button', { name: 'Add Project' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /^A folder already exists at C:\\Users\\ada\\.komla\\repos\\app\. Choose another name, or remove the folder\.$/
+    );
+  });
+
+  it('says an existing repository gets a bare clone of its own, leaving the folder as it is', async () => {
+    const user = userEvent.setup();
+    render(<ProjectCreationForm onSuccess={vi.fn()} compact hideAdvanced hideProjectColor />);
+
+    await user.click(screen.getByRole('button', { name: /Browse for folder/ }));
+
+    expect(
+      await screen.findByText(
+        'Git repository detected. Komla adds its own bare clone of it and leaves this folder as it is; new workspaces use isolated worktrees.'
+      )
+    ).toBeInTheDocument();
+  });
+
   it('shows a prominent notice only after selecting a non-Git folder', async () => {
     const user = userEvent.setup();
     vi.mocked(window.api.getDirectoryInfo).mockResolvedValue({ isGit: false, branch: null });
