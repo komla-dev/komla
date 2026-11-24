@@ -365,6 +365,11 @@ class SshWorkspaceDiff {
         'fi',
         'binary=0',
         'numstat=$(git diff --numstat "$ref" -- "$old_file" "$file" 2>/dev/null || printf "")',
+        // An untracked file has no numstat against a ref, so diff it on its own, unless it's
+        // over the cap, which marks it binary anyway.
+        'if [ -z "$numstat" ] && [ "$old_exists" = "0" ] && [ "$new_exists" = "1" ] && [ "$new_size" -le "$cap" ] 2>/dev/null; then',
+        '  numstat=$(git diff --no-index --numstat -- /dev/null "$file" 2>/dev/null || true)',
+        'fi',
         'first_add=$(printf "%s\\n" "$numstat" | awk -F "\\t" \'NR==1 { print $1 }\')',
         'first_del=$(printf "%s\\n" "$numstat" | awk -F "\\t" \'NR==1 { print $2 }\')',
         'if [ "$first_add" = "-" ] && [ "$first_del" = "-" ]; then binary=1; fi',

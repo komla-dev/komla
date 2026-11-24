@@ -401,6 +401,61 @@ describe('workspaceGitService', () => {
     }
   });
 
+  it.each([
+    { tracked: false, againstBranch: false, status: 'added' },
+    { tracked: false, againstBranch: true, status: 'added' },
+    { tracked: true, againstBranch: false, status: 'modified' },
+  ])('returns image data for an SSH image diff: %j', async ({ tracked, againstBranch, status }) => {
+    const directory = mkdtempSync(join(tmpdir(), 'komla-image-diff-'));
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: directory });
+    const oldPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+    const newPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1]);
+    try {
+      git('init', '-b', 'main');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      git('commit', '-q', '--allow-empty', '-m', 'base');
+      if (tracked) {
+        writeFileSync(join(directory, 'photo.png'), oldPng);
+        git('add', '.');
+        git('commit', '-qm', 'photo');
+      }
+      writeFileSync(join(directory, 'photo.png'), newPng);
+      workspaceServiceMock.get.mockReturnValue({
+        ...sshWorkspace,
+        backend: { ...sshWorkspace.backend, remoteDirectory: directory },
+      });
+      sshWorkspaceServiceMock.run.mockImplementation(async (_host, command: string) =>
+        execFileSync('sh', ['-c', command], { encoding: 'utf8' })
+      );
+      const { workspaceGitService } =
+        await import('../../../src/main/services/workspace-git.service');
+      const result = againstBranch
+        ? await workspaceGitService.getFullFileDiffAgainstBranch(
+            'ws-ssh',
+            'photo.png',
+            'main',
+            true
+          )
+        : await workspaceGitService.getFullFileDiff('ws-ssh', 'photo.png', false);
+
+      expect(result).toEqual({
+        path: 'photo.png',
+        oldContent: null,
+        newContent: null,
+        status,
+        isBinary: true,
+        isImage: true,
+        mimeType: 'image/png',
+        oldImageData: tracked ? oldPng.toString('base64') : null,
+        newImageData: newPng.toString('base64'),
+      });
+    } finally {
+      sshWorkspaceServiceMock.run.mockReset();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('preserves empty content for existing sides of an SSH file diff', async () => {
     workspaceServiceMock.get.mockReturnValue(sshWorkspace);
     sshWorkspaceServiceMock.run.mockResolvedValue(
