@@ -1651,7 +1651,7 @@ export function WorkspaceList({
               const containsSelection =
                 !expanded && group.workspaces.some((w) => w.id === selectedWorkspaceId);
               const groupProject = group.projectId ? projectMap.get(group.projectId) : undefined;
-              const [unaddedSshWorkspace] = sshWorkspacesWithoutProject(group);
+              const unaddedSshWorkspaces = sshWorkspacesWithoutProject(group);
 
               const dragHandlers: GroupDragHandlers = isGroupDraggable
                 ? buildGroupDragHandlers(
@@ -1699,9 +1699,9 @@ export function WorkspaceList({
                   </div>
                   {/* Shown collapsed too, so workspaces synced in for a repository not added here
                       stand out until the user adds it. */}
-                  {unaddedSshWorkspace && (
+                  {unaddedSshWorkspaces.length > 0 && (
                     <SshRepositoryNotAProjectCallout
-                      workspace={unaddedSshWorkspace}
+                      workspaces={unaddedSshWorkspaces}
                       repoName={group.projectInfo.name}
                       className="mx-1 mt-0.5 mb-1"
                     />
