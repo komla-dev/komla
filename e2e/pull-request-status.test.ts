@@ -52,7 +52,12 @@ const test = base.extend({
     fs.mkdirSync(FAKE_GH_DIR, { recursive: true });
     fs.writeFileSync(path.join(FAKE_GH_DIR, 'gh'), FAKE_GH, { mode: 0o755 });
     // A zsh login shell would otherwise read the user's dotfiles, which can put the real gh first.
-    fs.writeFileSync(path.join(FAKE_GH_DIR, '.zprofile'), '');
+    // /etc/zprofile still runs path_helper, which moves /etc/paths.d entries such as Homebrew's
+    // bin ahead of the PATH given here, so put the fake gh first again after it.
+    fs.writeFileSync(
+      path.join(FAKE_GH_DIR, '.zprofile'),
+      `export PATH='${FAKE_GH_DIR}'${path.delimiter}"$PATH"\n`
+    );
     await provide();
   },
 });
