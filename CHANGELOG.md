@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.3.0]
+
+### New
+
+- **Links on markers.** `komla mark` takes `--link <url>`, so an agent can put a clickable pull request marker on its workspace card. Clicking the marker on the card or in Overview opens the page, through the SSH host's tunnel for a localhost link.
+- **SSH hosts catch up with origin at once.** After a push or land on this computer, connected SSH hosts fetch origin's target branch right away instead of at their next background fetch, and when a host finds that origin has moved, this computer fetches at once too.
+- **A project's folders in its settings.** Project settings has a Folders card showing Komla's clone of the project and its worktrees folder, each copyable and openable, so you can tell where a project's files live, even after renaming it.
+
+### Improvements
+
+- The branch pickers are now named "New Branch from…" and "Open Existing Branch…", so it's clearer which one starts a new branch and which opens one that already exists.
+- `komla launch --effort` works without `--preset`, picking the level for the agent the launch would start.
+- The setup step and Quick Command editors say which shell runs the command, such as PowerShell 7, WSL or the SSH host's shell, and the setup failure toast's button opens the failed step's output.
+- When an SSH workspace's repository was renamed and a project here still has the old URL, Komla offers to link its workspaces to that project instead of adding a second one.
+- When a project's copy on an SSH host has a different origin URL, the error now names both URLs and the copy's folder.
+- Phones can connect after a restart without opening Settings first. Komla keeps retrying remote control and the Tailscale Serve route, including when your computer wakes, and Settings says what failed in the meantime.
+
+### Fixes
+
+- Restarting to install an update on macOS now offers to restart the workspaces that were running.
+- A branch rebased after it was pushed no longer shows its pushed commits as behind origin, and an SSH workspace can push it.
+- A workspace started from another workspace's branch keeps the project's target branch, instead of comparing against the other branch.
+- Creating an SSH workspace no longer fails after the token or password in a project's origin URL changed.
+- A photo an agent adds in an SSH workspace shows in the diff, instead of "Binary file changed".
+- The pull request item in the status bar hides when `gh` can't read the pull request, instead of showing a grey icon for good.
+- Bold text in the terminal no longer mixes in glyphs from a fallback font, most visible on Windows.
+- Files excluded in a local repository's `.git/info/exclude` stay excluded in workspaces of the project made from it.
+- Adding a project never deletes a folder Komla didn't make. A folder already at the project's path gets the next free name instead.
+- Voice transcription works on Windows x64 and Intel Macs.
+- A background setup step or Quick Command in PowerShell that fails is now reported as failed.
+- The diff of an SSH workspace whose folder is gone from its host shows no changes, instead of an error quoting the command.
+- A diff that fails to refresh keeps showing the last one, instead of reporting an app error.
+- An SSH workspace no longer makes Komla lag while a build in it writes files nonstop.
+
 ## [1.2.2]
 
 ### Fixes
