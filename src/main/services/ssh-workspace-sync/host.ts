@@ -3,6 +3,7 @@ import { posix as pathPosix } from 'path';
 import { shellQuotePosix } from '../../../shared/lib/shell-quote';
 import { isSshHostDisconnected } from '../ssh-host-disconnection';
 import { sshHostService } from '../ssh-host.service';
+import { sshWorkspaceBasePath } from '../ssh-workspace-base-path';
 import { joinRemote, sshWorkspaceService } from '../ssh-workspace.service';
 
 import {
@@ -21,7 +22,7 @@ function manifestPath(backend: SshWorkspaceBackend, workspaceId: string): string
   if (!isSshWorkspaceManifestId(workspaceId)) {
     throw new Error(`Invalid SSH workspace manifest id ${workspaceId}`);
   }
-  const remoteBasePath = pathPosix.dirname(pathPosix.dirname(backend.remoteProjectRoot));
+  const remoteBasePath = sshWorkspaceBasePath(backend);
   return joinRemote(remoteBasePath, SSH_WORKSPACE_MANIFEST_DIRECTORY, `${workspaceId}.json`);
 }
 

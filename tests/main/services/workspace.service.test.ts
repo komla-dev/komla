@@ -510,6 +510,15 @@ const mockSshWorkspaceService = {
   ),
   createWorkspacePlan: vi.fn(createMockSshWorkspacePlan),
   deleteWorkspace: vi.fn(() => Promise.resolve()),
+  createScratchFolder: vi.fn((hostId: string, names: string[]) =>
+    Promise.resolve({
+      kind: 'ssh' as const,
+      hostId,
+      remoteDirectory: `/home/dev/.komla/scratch/${names[0]}`,
+      scratch: true as const,
+    })
+  ),
+  deleteScratchFolder: vi.fn(() => Promise.resolve()),
   deleteHostData: vi.fn(() => Promise.resolve()),
   forgetHost: vi.fn(),
   killTerminalSessions: vi.fn(() => Promise.resolve()),
@@ -16300,6 +16309,207 @@ describe('WorkspaceService', () => {
       );
       await workspaceService.delete('swift-fox', true);
       expect(await removedPaths()).toEqual([]);
+    });
+  });
+
+  describe('Scratch workspaces on an SSH host', () => {
+    const sshHost = { id: 'ssh-dev', name: 'SSH Devbox', hostname: 'dev.example.com' };
+    const hostFolder = '/home/dev/.komla/scratch/swift-fox';
+    const savedSshScratch = (id: string, extra = {}) => ({
+      id,
+      name: id,
+      workingDirectory: `ssh://ssh-dev${hostFolder}`,
+      backend: { kind: 'ssh', hostId: 'ssh-dev', remoteDirectory: hostFolder, scratch: true },
+      scratch: true,
+      isWorktree: false,
+      projectId: null,
+      windowId: null,
+      categoryId: null,
+      createdAt: 1000,
+      lastActivityAt: 1000,
+      order: 0,
+      ...extra,
+    });
+
+    beforeEach(() => {
+      mockConfigService.get.mockReturnValue({ sshHosts: [sshHost] });
+    });
+
+    it('makes its folder on the host it is started on, outside any project', async () => {
+      vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      const workspace = await workspaceService.create({
+        mode: 'directory',
+        scratch: true,
+        environment: { kind: 'ssh', hostId: 'ssh-dev' },
+      });
+
+      const [hostId, names] = mockSshWorkspaceService.createScratchFolder.mock.calls[0]!;
+      expect(hostId).toBe('ssh-dev');
+      // Names to fall back on when one is taken there.
+      expect(names.length).toBeGreaterThan(1);
+      const name = names[0]!;
+      expect(workspace).toMatchObject({
+        scratch: true,
+        isWorktree: false,
+        projectId: null,
+        workingDirectory: `ssh://ssh-dev/home/dev/.komla/scratch/${name}`,
+        backend: {
+          kind: 'ssh',
+          hostId: 'ssh-dev',
+          remoteDirectory: `/home/dev/.komla/scratch/${name}`,
+          scratch: true,
+        },
+      });
+      expect(workspace.name).not.toBe('Workspace');
+      // Nothing about a repository, nor a folder on this computer.
+      expect(mockSshWorkspaceService.ensureWorkspaceReady).not.toHaveBeenCalled();
+      expect(vfs.mock.mkdirSync).not.toHaveBeenCalledWith(
+        expect.stringContaining(join('/mock/home/.komla', 'scratch'))
+      );
+      // The companion its terminals use installs on the host.
+      await vi.waitFor(() =>
+        expect(mockRemoteCompanionService.ensureInstalled).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'ssh-dev' }),
+          '/home/dev/.komla'
+        )
+      );
+    });
+
+    it('starts on the SSH host new workspaces start on, as a worktree would', async () => {
+      vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
+      mockConfigService.get.mockReturnValue({
+        sshHosts: [sshHost],
+        lastWorkspaceEnvironment: { kind: 'ssh', hostId: 'ssh-dev' },
+      });
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      const workspace = await workspaceService.create({ mode: 'directory', scratch: true });
+
+      expect(workspace.backend).toMatchObject({ kind: 'ssh', scratch: true });
+    });
+
+    it('still opens any other folder on this computer when an SSH host is the default', async () => {
+      vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
+      mockConfigService.get.mockReturnValue({
+        sshHosts: [sshHost],
+        lastWorkspaceEnvironment: { kind: 'ssh', hostId: 'ssh-dev' },
+      });
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      const workspace = await workspaceService.create({
+        mode: 'directory',
+        directoryPath: '/mock/dir1',
+      });
+
+      expect(workspace.backend?.kind).not.toBe('ssh');
+      expect(mockSshWorkspaceService.createScratchFolder).not.toHaveBeenCalled();
+    });
+
+    it('is still on its host, and still scratch, after a restart', async () => {
+      vfs.setFile(
+        '/mock/home/.komla/workspaces.json',
+        JSON.stringify([savedSshScratch('swift-fox')])
+      );
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      expect(workspaceService.get('swift-fox')).toMatchObject({
+        scratch: true,
+        backend: { kind: 'ssh', hostId: 'ssh-dev', remoteDirectory: hostFolder, scratch: true },
+      });
+    });
+
+    it('deletes its folder on the host, not a worktree, when deleted for good', async () => {
+      vfs.setFile(
+        '/mock/home/.komla/workspaces.json',
+        JSON.stringify([savedSshScratch('swift-fox', { status: 'trashed', trashedAt: 1000 })])
+      );
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      await workspaceService.delete('swift-fox', true);
+
+      expect(mockSshWorkspaceService.deleteScratchFolder).toHaveBeenCalledWith({
+        kind: 'ssh',
+        hostId: 'ssh-dev',
+        remoteDirectory: hostFolder,
+        scratch: true,
+      });
+      expect(mockSshWorkspaceService.deleteWorkspace).not.toHaveBeenCalled();
+      expect(mockRemovePathInChild).not.toHaveBeenCalled();
+      // It had no manifest on the host, so it leaves no tombstone there.
+      expect(mockSshWorkspaceSyncHost.delete).not.toHaveBeenCalled();
+      expect(workspaceService.get('swift-fox')).toBeUndefined();
+    });
+
+    it('stays when its folder on the host could not be deleted, so deleting can be retried', async () => {
+      vfs.setFile(
+        '/mock/home/.komla/workspaces.json',
+        JSON.stringify([savedSshScratch('swift-fox')])
+      );
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+      mockSshWorkspaceService.deleteScratchFolder.mockRejectedValueOnce(new Error('host offline'));
+
+      await expect(workspaceService.delete('swift-fox', true)).rejects.toThrow('host offline');
+
+      expect(workspaceService.get('swift-fox')).toBeDefined();
+    });
+
+    it('leaves its folder on the host to another workspace that uses it', async () => {
+      vfs.setFile(
+        '/mock/home/.komla/workspaces.json',
+        JSON.stringify([savedSshScratch('swift-fox'), savedSshScratch('swift-fox-too')])
+      );
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      await workspaceService.delete('swift-fox', true);
+
+      expect(mockSshWorkspaceService.deleteScratchFolder).not.toHaveBeenCalled();
+    });
+
+    it('deletes the folder it made on the host when creating the workspace fails', async () => {
+      vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+      mockAgentPresetService.recordPresetUsage.mockImplementationOnce(() => {
+        throw new Error('preset store unreadable');
+      });
+
+      await expect(
+        workspaceService.create({
+          mode: 'directory',
+          scratch: true,
+          environment: { kind: 'ssh', hostId: 'ssh-dev' },
+        })
+      ).rejects.toThrow('preset store unreadable');
+
+      const made = await mockSshWorkspaceService.createScratchFolder.mock.results[0]!.value;
+      expect(mockSshWorkspaceService.deleteScratchFolder).toHaveBeenCalledWith(made);
+      expect(workspaceService.list()).toEqual([]);
+    });
+
+    it('refuses to keep a folder on the host, which no workspace here could open', async () => {
+      vfs.setFile(
+        '/mock/home/.komla/workspaces.json',
+        JSON.stringify([savedSshScratch('swift-fox')])
+      );
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      await expect(workspaceService.keepScratch('swift-fox')).rejects.toThrow('SSH host');
+      expect(workspaceService.get('swift-fox')?.scratch).toBe(true);
+    });
+
+    it('refuses an SSH scratch workspace that names a repository', async () => {
+      vfs.setFile('/mock/home/.komla/workspaces.json', '[]');
+      const { workspaceService } = await import('../../../src/main/services/workspace.service');
+
+      await expect(
+        workspaceService.create({
+          mode: 'directory',
+          scratch: true,
+          location: { kind: 'ssh', hostId: 'ssh-dev', gitUrl: 'git@github.com:acme/app.git' },
+        })
+      ).rejects.toThrow('makes its own folder');
+      expect(mockSshWorkspaceService.createScratchFolder).not.toHaveBeenCalled();
     });
   });
 

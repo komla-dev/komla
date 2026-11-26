@@ -1642,6 +1642,103 @@ describe('workspaceFileService', () => {
     }
   );
 
+  it.runIf(process.platform !== 'win32')(
+    'lists an SSH folder that is not a repository, as a scratch folder on a host is',
+    async () => {
+      const folder = await mkdtemp(join(tmpdir(), 'komla-workspace-scratch-list-test-'));
+      tempDirectories.push(folder);
+      await mkdir(join(folder, 'src'));
+      await writeFile(join(folder, 'src', 'main.py'), 'print(1)');
+      await writeFile(join(folder, '.env'), 'A=1');
+      await writeFile(join(folder, '.DS_Store'), '');
+      await mkdir(join(folder, 'node_modules', 'left-pad'), { recursive: true });
+      await writeFile(join(folder, 'node_modules', 'left-pad', 'index.js'), '');
+      await mkdir(join(folder, '.komla-files'));
+      await writeFile(join(folder, '.komla-files', 'shot.png'), 'png');
+      workspaceServiceMock.get.mockReturnValue({
+        ...sshWorkspace,
+        workingDirectory: `ssh://ssh-dev${folder}`,
+        backend: { kind: 'ssh', hostId: 'ssh-dev', remoteDirectory: folder, scratch: true },
+      });
+      sshWorkspaceServiceMock.run.mockImplementation(async (_host, command: string) => {
+        const { stdout } = await execFileAsync('/bin/sh', ['-c', command]);
+        return stdout;
+      });
+
+      const { workspaceFileService } =
+        await import('../../../src/main/services/workspace-file.service');
+      const listed = await workspaceFileService.listFiles('ws-ssh', true);
+
+      expect([...listed.files].sort()).toEqual(['.env', '.komla-files/shot.png', 'src/main.py']);
+      expect(listed.gitIgnoredFiles).toEqual([]);
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'lists a scratch folder on a host by its files, even inside a repository that ignores it',
+    async () => {
+      // A home folder tracked as a dotfiles repository, which ignores everything not added.
+      const home = await mkdtemp(join(tmpdir(), 'komla-workspace-scratch-nested-test-'));
+      tempDirectories.push(home);
+      await execFileAsync('git', ['init', '-q', home]);
+      await writeFile(join(home, '.gitignore'), '*\n');
+      const folder = join(home, '.komla', 'scratch', 'swift-fox');
+      await mkdir(folder, { recursive: true });
+      await writeFile(join(folder, 'main.py'), 'print(1)');
+      workspaceServiceMock.get.mockReturnValue({
+        ...sshWorkspace,
+        workingDirectory: `ssh://ssh-dev${folder}`,
+        backend: { kind: 'ssh', hostId: 'ssh-dev', remoteDirectory: folder, scratch: true },
+      });
+      sshWorkspaceServiceMock.run.mockImplementation(async (_host, command: string) => {
+        const { stdout } = await execFileAsync('/bin/sh', ['-c', command], { cwd: folder });
+        return stdout;
+      });
+
+      const { workspaceFileService } =
+        await import('../../../src/main/services/workspace-file.service');
+      const listed = await workspaceFileService.listFiles('ws-ssh', true);
+
+      expect(listed.files).toEqual(['main.py']);
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'stops listing a large scratch folder on a host at whole files, as a local folder stops',
+    async () => {
+      const folder = await mkdtemp(join(tmpdir(), 'komla-workspace-scratch-cap-test-'));
+      tempDirectories.push(folder);
+      // Long names, so the listing stops on its size before the file count.
+      const names = Array.from(
+        { length: 20_005 },
+        (_, index) => `${String(index).padStart(6, '0')}${'x'.repeat(230)}`
+      );
+      for (const name of names) await writeFile(join(folder, name), '');
+      workspaceServiceMock.get.mockReturnValue({
+        ...sshWorkspace,
+        workingDirectory: `ssh://ssh-dev${folder}`,
+        backend: { kind: 'ssh', hostId: 'ssh-dev', remoteDirectory: folder, scratch: true },
+      });
+      sshWorkspaceServiceMock.run.mockImplementation(async (_host, command: string) => {
+        const { stdout } = await execFileAsync('/bin/sh', ['-c', command], {
+          cwd: folder,
+          maxBuffer: 64 * 1024 * 1024,
+        });
+        return stdout;
+      });
+
+      const { workspaceFileService } =
+        await import('../../../src/main/services/workspace-file.service');
+      const listed = await workspaceFileService.listFiles('ws-ssh', false);
+
+      expect(listed.files.length).toBeGreaterThan(0);
+      expect(listed.files.length).toBeLessThan(names.length);
+      const created = new Set(names);
+      expect(listed.files.filter((file) => !created.has(file))).toEqual([]);
+    },
+    60_000
+  );
+
   it("lists an SSH workspace's own files in one call, without its linked workspaces", async () => {
     workspaceServiceMock.get.mockReturnValue(sshWorkspace);
     const files = gzipSync('public/favicon.svg\0README.md\0').toString('base64');

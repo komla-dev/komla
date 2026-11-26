@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use komla::{
     CompanionSnapshotPayload, FileListFingerprint, RepositoryEventClassifier,
     RepositoryEventFilter, RepositoryEventKind, RepositoryWatchPaths, RepositoryWatchSignal,
@@ -373,9 +373,8 @@ fn reload_workspaces(
 
 fn run(mut config: CompanionConfig, mut reload: ConfigReload) -> anyhow::Result<()> {
     SYNC_DIAGNOSTICS.store(config.diagnostics, Ordering::Relaxed);
-    if config.workspaces.is_empty() {
-        bail!("companion requires at least one monitored workspace");
-    }
+    // A host with only scratch folders, which aren't repositories, has none to watch, yet its
+    // agents' hooks still come through the mailbox.
     let client = KomlaClient::new(config.endpoint.clone());
     let (sender, receiver) = mpsc::sync_channel(WATCH_EVENT_QUEUE_CAPACITY);
     let mut workspaces = Vec::with_capacity(config.workspaces.len());

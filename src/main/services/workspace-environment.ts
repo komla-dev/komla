@@ -82,7 +82,8 @@ export function projectRepositoryUrl(
   now = Date.now()
 ): Promise<string | undefined> {
   if (isSshWorkspace(workspace)) {
-    const url = workspace.backend.gitUrl.trim();
+    // A scratch folder on a host has no repository.
+    const url = workspace.backend.scratch ? '' : workspace.backend.gitUrl.trim();
     return Promise.resolve(url ? withoutCredentials(url) : undefined);
   }
   const project = workspace.projectId ? projectService.get(workspace.projectId) : undefined;

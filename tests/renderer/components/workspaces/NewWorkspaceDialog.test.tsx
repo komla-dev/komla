@@ -4944,6 +4944,57 @@ describe('NewWorkspaceDialog', () => {
       }
     });
 
+    it('starts a scratch workspace on the SSH host picked for it', async () => {
+      const user = userEvent.setup();
+      mockSshHostsHolder.value = [
+        { id: 'remote', name: 'Build Server', hostname: 'build.example.com' },
+      ];
+      render(<NewWorkspaceDialog open={true} onOpenChange={vi.fn()} />);
+      await screen.findByPlaceholderText(/what should the agent work on/i);
+      await pickFromProjectDropdown(user, /^new scratch workspace$/i);
+
+      await user.click(await screen.findByRole('button', { name: /^Local$/i }));
+      // Still scratch: a host makes scratch folders, unlike a folder project's.
+      expect(screen.getByRole('button', { name: /scratch workspace/i })).toBeInTheDocument();
+      await user.click(getLaunchButton());
+
+      await waitFor(() =>
+        expect(mockCreateWorkspace).toHaveBeenCalledWith(
+          expect.objectContaining({
+            mode: 'directory',
+            scratch: true,
+            environment: { kind: 'ssh', hostId: 'remote' },
+          })
+        )
+      );
+    });
+
+    it('starts a scratch workspace on the SSH host used last', async () => {
+      const user = userEvent.setup();
+      mockConfigHolder.value = {
+        ...mockConfigHolder.value,
+        lastWorkspaceEnvironment: { kind: 'ssh', hostId: 'remote' },
+      };
+      mockSshHostsHolder.value = [
+        { id: 'remote', name: 'Build Server', hostname: 'build.example.com' },
+      ];
+      render(<NewWorkspaceDialog open={true} onOpenChange={vi.fn()} />);
+      await screen.findByPlaceholderText(/what should the agent work on/i);
+
+      await pickFromProjectDropdown(user, /^new scratch workspace$/i);
+      expect(await screen.findByText('Build Server')).toBeInTheDocument();
+      await user.click(getLaunchButton());
+
+      await waitFor(() =>
+        expect(mockCreateWorkspace).toHaveBeenCalledWith(
+          expect.objectContaining({
+            scratch: true,
+            environment: { kind: 'ssh', hostId: 'remote' },
+          })
+        )
+      );
+    });
+
     it('takes the most recently used Git project when an SSH host is picked', async () => {
       const user = userEvent.setup();
       mockProjects.unshift({

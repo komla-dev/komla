@@ -91,6 +91,7 @@ import type {
   AddAgentTabOptions,
   CreateWorkspaceParams,
   NewWorkspaceDraft,
+  SshWorktreeBackend,
   Workspace,
   WorkspaceVirtualDesktop,
   WorkspaceTrashRequest,
@@ -327,7 +328,7 @@ export interface KomlaOperationWorkspace {
   workingDirectory?: string;
   presetId?: string | null;
   launchModeId?: string | null;
-  backend?: { kind: 'local' } | { kind: 'ssh'; hostId: string; gitUrl?: string };
+  backend?: { kind: 'local' } | { kind: 'ssh'; hostId: string; gitUrl?: string; scratch?: true };
   windowId?: string | null;
   name?: string;
   customName?: string;
@@ -2131,16 +2132,13 @@ export class KomlaOperationService {
         : this.localLaunchPlacement(config, mode, fromWorkspace, sourceWorkspace)),
       deferBranchNaming: true,
       skipRecordUsage: true,
-      ...(sourceWorkspace?.backend?.kind === 'ssh'
+      ...(sourceWorkspace?.backend?.kind === 'ssh' && !sourceWorkspace.backend.scratch
         ? {
             location: {
               kind: 'ssh' as const,
               hostId: sourceWorkspace.backend.hostId,
               gitUrl: sourceWorkspace.backend.gitUrl,
-              sourceBackend: sourceWorkspace.backend as Extract<
-                NonNullable<Workspace['backend']>,
-                { kind: 'ssh' }
-              >,
+              sourceBackend: sourceWorkspace.backend as SshWorktreeBackend,
             },
             sourceWorkspaceId: sourceWorkspace.id,
           }
@@ -2157,7 +2155,10 @@ export class KomlaOperationService {
       ? workspace?.projectId === project.id
         ? workspace
         : undefined
-      : workspace?.projectId == null && workspace?.backend?.kind === 'ssh'
+      : // A scratch folder on a host has no repository to share.
+        workspace?.projectId == null &&
+          workspace?.backend?.kind === 'ssh' &&
+          !workspace.backend.scratch
         ? workspace
         : undefined;
   }

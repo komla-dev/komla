@@ -62,6 +62,7 @@ import { buildOpenCodeNotifyPlugin } from './opencode-settings.service';
 import { getKomlaBasePath } from './paths';
 import { sshConnectionService } from './ssh-connection.service';
 import { sshHostService } from './ssh-host.service';
+import { SSH_SCRATCH_DIRECTORY, sshWorkspaceBasePath } from './ssh-workspace-base-path';
 import {
   hookJournalFolder,
   parseHookJournalEntry,
@@ -91,6 +92,8 @@ import type {
   SshIntegrationType,
   SshIntegrationUpdates,
   SshWorkspaceBackend,
+  SshWorktreeBackend,
+  SshScratchBackend,
 } from '../../shared/types';
 import type { RemoteNotificationIntegrationUpdate } from '../../shared/types/notification-integration';
 import type { SshTerminalPoolAssignment } from '../lib/terminal-control';
@@ -176,12 +179,12 @@ export interface CreateSshWorkspaceArgs {
   baseBranch?: string;
   startPoint?: string;
   resolvedBasePath?: string;
-  sourceBackend?: SshWorkspaceBackend;
+  sourceBackend?: SshWorktreeBackend;
   onProgress?: (status: string) => void;
 }
 
 export interface SshWorkspaceCreateResult {
-  backend: SshWorkspaceBackend;
+  backend: SshWorktreeBackend;
   workingDirectory: string;
   repoName: string;
 }
@@ -306,7 +309,7 @@ function safeRemoteSegment(value: string): string {
   return sanitizeWorktreeProjectSegment(value).replace(/[/\\]/g, '-');
 }
 
-function startsFromTargetBranch(backend: SshWorkspaceBackend): boolean {
+function startsFromTargetBranch(backend: SshWorktreeBackend): boolean {
   const startPoint = backend.startPoint || backend.baseBranch || 'HEAD';
   return !!backend.baseBranch && startPoint === backend.baseBranch;
 }
@@ -317,7 +320,7 @@ function startsFromTargetBranch(backend: SshWorkspaceBackend): boolean {
  * an existing branch, which may have just been pushed.
  */
 function recentStartCheck(
-  backend: SshWorkspaceBackend,
+  backend: SshWorktreeBackend,
   startPoint: string,
   originStartPoint: string
 ): string | undefined {
@@ -334,6 +337,18 @@ function recentStartCheck(
     return `origin_fetched_before && ${has(startPoint)} 2>/dev/null`;
   }
   return `origin_fetched_recently ${shellQuotePosix(originStartPoint)} && { ${has(startPoint)} || ${has(`refs/remotes/origin/${originStartPoint}`)}; } 2>/dev/null`;
+}
+
+/** Whether `folder` is a folder directly in the scratch folder under the host's `basePath`. */
+export function isRemoteScratchFolder(basePath: string, folder: string): boolean {
+  const name = pathPosix.basename(folder);
+  return (
+    pathPosix.normalize(folder) === folder &&
+    pathPosix.dirname(folder) === joinRemote(basePath, SSH_SCRATCH_DIRECTORY) &&
+    name !== '' &&
+    name !== '.' &&
+    name !== '..'
+  );
 }
 
 /** A lookup of a host's workspace base path, and the path once it's found. */
@@ -1061,7 +1076,7 @@ class SshWorkspaceService {
   }
 
   async ensureWorkspaceReady(
-    backend: SshWorkspaceBackend,
+    backend: SshWorktreeBackend,
     companion?: () => Promise<string | undefined>
   ): Promise<{
     createdBranch: boolean;
@@ -2262,7 +2277,7 @@ class SshWorkspaceService {
 
   async ensureRemoteNotificationScript(backend: SshWorkspaceBackend): Promise<void> {
     const host = this.getHost(backend.hostId);
-    const basePath = pathPosix.dirname(pathPosix.dirname(backend.remoteProjectRoot));
+    const basePath = sshWorkspaceBasePath(backend);
     const cacheKey = JSON.stringify([this.hostConnectionKey(host), basePath]);
     const preparedConnections = this.preparedNotifyScriptHosts.get(host.id);
     if (preparedConnections?.has(cacheKey)) return;
@@ -2370,7 +2385,7 @@ class SshWorkspaceService {
     };
   }
 
-  withRemoteDirectoryAttempt(backend: SshWorkspaceBackend, attempt: number): SshWorkspaceBackend {
+  withRemoteDirectoryAttempt(backend: SshWorktreeBackend, attempt: number): SshWorktreeBackend {
     if (attempt < 2) return backend;
     return {
       ...backend,
@@ -2381,7 +2396,7 @@ class SshWorkspaceService {
     };
   }
 
-  private buildLazySetupCommand(backend: SshWorkspaceBackend, companionPath?: string): string {
+  private buildLazySetupCommand(backend: SshWorktreeBackend, companionPath?: string): string {
     const branchName = backend.branchName;
     const startPoint = backend.startPoint || backend.baseBranch || 'HEAD';
     const originStartPoint = startPoint
@@ -2801,7 +2816,7 @@ class SshWorkspaceService {
    * worktree) is logged instead of failing the delete, since the worktree is already gone.
    */
   async deleteWorkspace(
-    backend: SshWorkspaceBackend,
+    backend: SshWorktreeBackend,
     deleteBranch?: boolean,
     branchName?: string,
     deleteOptions: { allowBranchToRemain?: boolean } = {}
@@ -2863,6 +2878,58 @@ class SshWorkspaceService {
       if (!deleteOptions.allowBranchToRemain || !branchRemained) throw error;
       logger.warn('Deleted remote workspace but Git kept its branch', { branchName, error });
     }
+  }
+
+  /**
+   * Makes an empty folder for a Scratch workspace in the host's scratch folder, named the first
+   * of `names` that isn't taken there.
+   */
+  async createScratchFolder(hostId: string, names: string[]): Promise<SshScratchBackend> {
+    const host = this.getHost(hostId);
+    const root = joinRemote(await this.resolveWorkspaceBasePath(hostId), SSH_SCRATCH_DIRECTORY);
+    const output = await this.run(
+      host,
+      [
+        `root=${shellQuotePosix(root)}`,
+        'mkdir -p "$root" || exit 1',
+        `for name in ${names.map(shellQuotePosix).join(' ')}; do`,
+        // Not -p, so a folder made meanwhile fails instead of being shared.
+        '  if mkdir "$root/$name" 2>/dev/null; then printf "%s\\n" "$name"; exit 0; fi',
+        'done',
+        'printf "[komla] could not make a folder for the scratch workspace\\n" >&2',
+        'exit 1',
+      ].join('\n'),
+      { purpose: { kind: 'interactive' } }
+    );
+    const name = output.trim().split(/\r?\n/).pop() ?? '';
+    if (!names.includes(name)) {
+      throw new Error('Could not make a folder for the scratch workspace on the SSH host.');
+    }
+    return { kind: 'ssh', hostId, remoteDirectory: joinRemote(root, name), scratch: true };
+  }
+
+  /** Deletes a Scratch workspace's folder, which must be directly in the host's scratch folder. */
+  async deleteScratchFolder(backend: SshScratchBackend): Promise<void> {
+    const host = this.getHost(backend.hostId);
+    const options: SshRunOptions = { purpose: { kind: 'interactive' } };
+    const basePath = await this.resolveRemoteBasePath(host, options);
+    if (!isRemoteScratchFolder(basePath, backend.remoteDirectory)) {
+      throw new Error(
+        `Refusing to delete a remote folder outside ${joinRemote(basePath, SSH_SCRATCH_DIRECTORY)}`
+      );
+    }
+    const folder = shellQuotePosix(backend.remoteDirectory);
+    await this.run(
+      host,
+      [
+        `rm -rf -- ${folder}`,
+        `if [ -e ${folder} ] || [ -L ${folder} ]; then`,
+        '  printf "[komla] failed to delete the scratch folder\\n" >&2',
+        '  exit 1',
+        'fi',
+      ].join('\n'),
+      options
+    );
   }
 
   private async killAllTerminalSessions(host: SshHost): Promise<void> {
@@ -3150,7 +3217,7 @@ class SshWorkspaceService {
   ): SshTerminalLaunchCommand {
     const host = this.getHost(backend.hostId);
     const dataPort = remoteKomlaDataPort(backend.hostId);
-    const remoteBasePath = pathPosix.dirname(pathPosix.dirname(backend.remoteProjectRoot));
+    const remoteBasePath = sshWorkspaceBasePath(backend);
     const terminalEnvironment = {
       KOMLA_NOTIFY_HOST: '127.0.0.1',
       KOMLA_NOTIFY_PORT: dataPort,
@@ -3165,7 +3232,8 @@ class SshWorkspaceService {
       KOMLA_TERMINAL_ID: terminalId,
       KOMLA_WORKSPACE_ID: workspaceId,
       KOMLA_REMOTE_WORKSPACE_DIR: backend.remoteDirectory,
-      KOMLA_TARGET_BRANCH: backend.baseBranch || 'main',
+      // A scratch folder isn't a repository, so it has no branch to compare with.
+      KOMLA_TARGET_BRANCH: backend.scratch ? undefined : backend.baseBranch || 'main',
       COLORTERM: 'truecolor',
       FORCE_HYPERLINK: '1',
     };

@@ -3,12 +3,17 @@ import {
   workspaceProvisionFailure,
   workspaceProvisionFieldsAfter,
 } from '../../shared/lib/workspace-provision-state';
-import { isSshWorkspace } from '../../shared/types/workspace';
+import { isSshWorktreeWorkspace } from '../../shared/types/workspace';
 import { createLogger } from '../lib/logger';
 
 import { sshWorkspaceService } from './ssh-workspace.service';
 
-import type { CreateWorkspaceParams, SshWorkspaceBackend, Workspace } from '../../shared/types';
+import type {
+  CreateWorkspaceParams,
+  SshWorkspaceBackend,
+  SshWorktreeBackend,
+  Workspace,
+} from '../../shared/types';
 
 const logger = createLogger('SshWorkspaceProvisioningService');
 const SSH_BRANCH_ALREADY_EXISTS_CODE = 'SSH_BRANCH_ALREADY_EXISTS';
@@ -87,7 +92,7 @@ export class SshWorkspaceProvisioningService {
     workspace: Workspace,
     companion: () => Promise<string | undefined>
   ): Promise<{ createdBranch: boolean; createdWorktree: boolean }> {
-    if (!isSshWorkspace(workspace) || this.preparedSshWorkspaceIds.has(workspace.id)) {
+    if (!isSshWorktreeWorkspace(workspace) || this.preparedSshWorkspaceIds.has(workspace.id)) {
       return { createdBranch: false, createdWorktree: false };
     }
 
@@ -137,7 +142,7 @@ export class SshWorkspaceProvisioningService {
   }
 
   private findSshBranchConflict(
-    backend: SshWorkspaceBackend,
+    backend: SshWorktreeBackend,
     branchName: string,
     excludeWorkspaceId?: string
   ): Workspace | undefined {
@@ -145,7 +150,7 @@ export class SshWorkspaceProvisioningService {
       .listWorkspaces()
       .find(
         (workspace) =>
-          isSshWorkspace(workspace) &&
+          isSshWorktreeWorkspace(workspace) &&
           workspace.backend.hostId === backend.hostId &&
           workspace.backend.remoteRepoPath === backend.remoteRepoPath &&
           workspace.branchName === branchName &&
@@ -184,7 +189,7 @@ export class SshWorkspaceProvisioningService {
     workspace: Workspace,
     { initialBranchName, params, branchPrefix, createPlan }: SshWorkspaceProvisioningRequest
   ): Promise<void> {
-    if (!isSshWorkspace(workspace))
+    if (!isSshWorktreeWorkspace(workspace))
       throw new Error('SSH workspace provisioning requires an SSH workspace');
     const shouldAutoResolve = params.autoResolveBranchConflicts === true;
     let branchName = initialBranchName;
@@ -251,7 +256,7 @@ export class SshWorkspaceProvisioningService {
   }
 
   complete(workspace: Workspace): void {
-    if (!isSshWorkspace(workspace))
+    if (!isSshWorktreeWorkspace(workspace))
       throw new Error('SSH workspace provisioning requires an SSH workspace');
     Object.assign(workspace, workspaceProvisionFieldsAfter(workspace, { kind: 'completed' }));
     workspace.provisioningBranchCreated = undefined;
@@ -267,7 +272,7 @@ export class SshWorkspaceProvisioningService {
     workspace: Workspace,
     reason: 'interrupted' | 'failed' | 'cancelled'
   ): Promise<'remove' | 'retain'> {
-    if (!isSshWorkspace(workspace))
+    if (!isSshWorktreeWorkspace(workspace))
       throw new Error('SSH workspace provisioning requires an SSH workspace');
     if (workspace.provisioningWorktreeCreated !== true) return 'remove';
     try {

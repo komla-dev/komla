@@ -315,6 +315,32 @@ describe('WorkspaceStatusService', () => {
     );
   });
 
+  it('reads no git status from a scratch folder on a host, which is not a repository', async () => {
+    const workspace = createWorkspace({
+      id: 'workspace-1',
+      scratch: true,
+      isWorktree: false,
+      backend: {
+        kind: 'ssh',
+        hostId: 'host-1',
+        remoteDirectory: '/home/dev/.komla/scratch/swift-fox',
+        scratch: true,
+      },
+    });
+    const getSshSnapshot = vi.fn();
+    const service = createStatusService({
+      getWorkspace: () => workspace,
+      listWorkspaces: () => [workspace],
+      getSshSnapshot,
+    });
+
+    await service.change({ kind: 'refresh-requested', workspaceId: workspace.id });
+
+    expect(getSshSnapshot).not.toHaveBeenCalled();
+    // Not taken for a host it couldn't reach.
+    expect(service.read(workspace.id)?.confirmation?.kind).not.toBe('unreachable');
+  });
+
   it.each([
     { localCopyCurrent: true, syncs: 0 },
     { localCopyCurrent: false, syncs: 1 },

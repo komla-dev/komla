@@ -6,7 +6,7 @@ import { isResumable } from '../../../shared/lib/terminal-execution-state';
 import { hasWorkspaceFiles } from '../../../shared/lib/workspace-provision-state';
 import { MAX_WORKSPACE_TAG_LENGTH, WORKSPACE_TAG_TONES } from '../../../shared/lib/workspace-tags';
 import {
-  isSshWorkspace,
+  isSshWorktreeWorkspace,
   type Workspace,
   type WorkspaceTerminalLayout,
 } from '../../../shared/types/workspace';
@@ -125,7 +125,8 @@ export function buildSshWorkspaceManifest(
   writtenBy?: string,
   syncs?: boolean
 ): SshWorkspaceManifest | undefined {
-  if (!isSshWorkspace(workspace) || !hasWorkspaceFiles(workspace)) {
+  // A scratch folder stays with the installation that made it.
+  if (!isSshWorktreeWorkspace(workspace) || !hasWorkspaceFiles(workspace)) {
     return undefined;
   }
   const { remoteDirectory, remoteRepoPath, remoteProjectRoot, gitUrl } = workspace.backend;

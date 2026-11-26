@@ -18,6 +18,9 @@ vi.mock('../../../src/main/lib/opencode-service', () => ({
   deleteReleasingOpenCodeLocation: (_folder: string, remove: () => Promise<void>) => remove(),
 }));
 
+const sshWorkspaceService = vi.hoisted(() => ({ deleteScratchFolder: vi.fn() }));
+vi.mock('../../../src/main/services/ssh-workspace.service', () => ({ sshWorkspaceService }));
+
 const { createScratchFolder, isScratchFolder, removeScratchFolder, scratchRoot } =
   await import('../../../src/main/services/workspace/scratch');
 
@@ -80,6 +83,43 @@ describe('scratch folders', () => {
 
     expect(existsSync(join(own, 'README.md'))).toBe(true);
     expect(existsSync(scratchRoot())).toBe(true);
+  });
+
+  it('deletes a scratch workspace’s folder on its SSH host there, not here', async () => {
+    const backend = {
+      kind: 'ssh' as const,
+      hostId: 'ssh-dev',
+      remoteDirectory: '/home/dev/.komla/scratch/swift-fox',
+      scratch: true as const,
+    };
+    const { path } = createScratchFolder();
+
+    await removeScratchFolder(
+      createWorkspace({ workingDirectory: `ssh://ssh-dev${path}`, backend, scratch: true })
+    );
+
+    expect(sshWorkspaceService.deleteScratchFolder).toHaveBeenCalledWith(backend);
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it('never deletes a worktree on an SSH host, even when a scratch workspace names it', async () => {
+    sshWorkspaceService.deleteScratchFolder.mockClear();
+
+    await removeScratchFolder(
+      createWorkspace({
+        scratch: true,
+        backend: {
+          kind: 'ssh',
+          hostId: 'ssh-dev',
+          remoteDirectory: '/home/dev/.komla/worktrees/app/main',
+          remoteRepoPath: '/home/dev/.komla/repos/app/repo.git',
+          remoteProjectRoot: '/home/dev/.komla/worktrees/app',
+          gitUrl: 'git@example.com:acme/app.git',
+        },
+      })
+    );
+
+    expect(sshWorkspaceService.deleteScratchFolder).not.toHaveBeenCalled();
   });
 
   it('leaves the folder of a workspace that is no longer scratch', async () => {

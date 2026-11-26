@@ -194,7 +194,6 @@ export class RemoteCompanionService {
     host: SshHost,
     options: StartRemoteCompanionOptions
   ): Promise<RemoteCompanionRuntime | undefined> {
-    if (options.workspaces.length === 0) return Promise.resolve(undefined);
     const key = hostKey(host);
     const signature = JSON.stringify({
       ...options,

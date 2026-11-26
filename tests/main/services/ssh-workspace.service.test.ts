@@ -6885,6 +6885,27 @@ describe("sshWorkspaceService", () => {
     expect(setupCommand).toContain("feature/foo");
   });
 
+  it("gives a terminal in a scratch folder no target branch, since the folder has no repository", async () => {
+    const { sshWorkspaceService } =
+      await import("../../../src/main/services/ssh-workspace.service");
+
+    const command = sshWorkspaceService.buildTerminalCommand(
+      {
+        kind: "ssh",
+        hostId: "ssh-dev",
+        remoteDirectory: "/home/devuser/.komla/scratch/swift-fox",
+        scratch: true,
+      },
+      "codex",
+      "term-a",
+      undefined,
+      "start",
+    );
+
+    expect(command).not.toContain("KOMLA_TARGET_BRANCH");
+    expect(command).toContain("/home/devuser/.komla/helpers/notify.sh");
+  });
+
   it("keeps SSH target branch separate from the worktree start point", async () => {
     const { sshWorkspaceService } =
       await import("../../../src/main/services/ssh-workspace.service");

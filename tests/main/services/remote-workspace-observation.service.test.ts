@@ -173,6 +173,34 @@ describe('RemoteWorkspaceObservationService', () => {
     expect(harness.service.companionForHost(host.id)).toEqual(harness.runtime);
   });
 
+  it('runs the companion and tunnel for a scratch folder, which it watches no repository in', async () => {
+    const scratch: Workspace = {
+      ...sshWorkspace('scratch-1'),
+      workingDirectory: 'ssh://ssh-dev/home/dev/.komla/scratch/swift-fox',
+      backend: {
+        kind: 'ssh',
+        hostId: host.id,
+        remoteDirectory: '/home/dev/.komla/scratch/swift-fox',
+        scratch: true,
+      },
+      branchName: undefined,
+      baseBranch: undefined,
+      isWorktree: false,
+      projectId: null,
+      scratch: true,
+    };
+    const harness = createHarness([scratch]);
+
+    await harness.service.reconcile();
+
+    expect(harness.calls).toEqual(['notification-script', 'companion', 'tunnel']);
+    expect(harness.dependencies.ensureRemoteCompanion).toHaveBeenCalledWith(
+      host,
+      expect.objectContaining({ remoteBasePath: '/home/dev/.komla', workspaces: [] })
+    );
+    expect(harness.service.companionForHost(host.id)).toEqual(harness.runtime);
+  });
+
   it('monitors a workspace whose tmux session runs on the host without this device attached', async () => {
     const harness = createHarness([
       sshWorkspace('workspace-1', { status: 'stopped', remoteSessionOnHost: true }),

@@ -4,12 +4,14 @@ import { isMonitored } from '../../shared/lib/terminal-execution-state';
 import { komlaSshRemoteDataPort, type SshHost } from '../../shared/types/ssh';
 import {
   isSshWorkspace,
+  isSshWorktreeWorkspace,
   type SshWorkspaceBackend,
   type Workspace,
 } from '../../shared/types/workspace';
 import { createLogger } from '../lib/logger';
 
 import { isSshHostDisconnected } from './ssh-host-disconnection';
+import { sshWorkspaceBasePath } from './ssh-workspace-base-path';
 import { SSH_WORKSPACE_MANIFEST_DIRECTORY } from './ssh-workspace-sync/workspace-manifest';
 
 import type {
@@ -114,7 +116,7 @@ export class RemoteWorkspaceObservationService {
     return (
       this.companionRuntimes.get(backend.hostId) ??
       this.dependencies.resolveCompanionRuntime(
-        pathPosix.dirname(pathPosix.dirname(backend.remoteProjectRoot)),
+        sshWorkspaceBasePath(backend),
         this.dependencies.companionInstallationId(backend.hostId)
       )
     );
@@ -326,17 +328,14 @@ export class RemoteWorkspaceObservationService {
 
     try {
       const host = this.dependencies.getHost(hostId);
-      const remoteBasePath = pathPosix.dirname(
-        pathPosix.dirname(representative.backend.remoteProjectRoot)
-      );
-      const monitored = workspaces.map((workspace) => {
-        if (!isSshWorkspace(workspace)) throw new Error('Expected SSH workspace');
-        return {
-          workspaceId: workspace.id,
-          workingTree: workspace.backend.remoteDirectory,
-          targetBranch: workspace.baseBranch || workspace.backend.baseBranch || 'main',
-        };
-      });
+      const remoteBasePath = sshWorkspaceBasePath(representative.backend);
+      // The companion watches repositories. A scratch folder isn't one, but its agents' hooks
+      // still need the companion running.
+      const monitored = workspaces.filter(isSshWorktreeWorkspace).map((workspace) => ({
+        workspaceId: workspace.id,
+        workingTree: workspace.backend.remoteDirectory,
+        targetBranch: workspace.baseBranch || workspace.backend.baseBranch || 'main',
+      }));
       await this.dependencies.ensureRemoteNotificationScript(representative.backend);
       const runtime = await this.dependencies.ensureRemoteCompanion(host, {
         remoteBasePath,

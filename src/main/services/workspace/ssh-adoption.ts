@@ -2,7 +2,11 @@ import { BrowserWindow } from 'electron';
 
 import { IPC } from '../../../shared/constants/ipc-channels';
 import { workspaceProvisionFieldsAfter } from '../../../shared/lib/workspace-provision-state';
-import { isSshWorkspace, type SshWorkspaceBackend } from '../../../shared/types/workspace';
+import {
+  isSshWorkspace,
+  isSshWorktreeWorkspace,
+  type SshWorktreeBackend,
+} from '../../../shared/types/workspace';
 import { gitRemoteIdentity } from '../../lib/git-remote-identity';
 import { createLogger } from '../../lib/logger';
 import { gitService } from '../git.service';
@@ -186,13 +190,13 @@ export class SshWorkspaceAdoption {
   async assignSshWorkspaceProjects(): Promise<void> {
     const unassigned = () =>
       Array.from(workspaceStore.workspaces.values()).filter(
-        (workspace) => isSshWorkspace(workspace) && !workspaceProject(workspace)
+        (workspace) => isSshWorktreeWorkspace(workspace) && !workspaceProject(workspace)
       );
     if (unassigned().length === 0) return;
     const projectsByRemote = await this.projectsByGitRemote();
     let assigned = false;
     for (const workspace of unassigned()) {
-      if (!isSshWorkspace(workspace)) continue;
+      if (!isSshWorktreeWorkspace(workspace)) continue;
       const project = this.sshRepositoryProject(workspace.backend, projectsByRemote);
       if (!project) continue;
       workspace.projectId = project.id;
@@ -209,7 +213,7 @@ export class SshWorkspaceAdoption {
    */
   linkSshWorkspaceToProject(workspaceId: string, projectId: string): void {
     const workspace = workspaceStore.workspaces.get(workspaceId);
-    if (!workspace || !isSshWorkspace(workspace)) {
+    if (!workspace || !isSshWorktreeWorkspace(workspace)) {
       throw new Error(`SSH workspace ${workspaceId} not found`);
     }
     const project = projectService.get(projectId);
@@ -218,7 +222,7 @@ export class SshWorkspaceAdoption {
     }
     for (const other of workspaceStore.workspaces.values()) {
       const sameClone =
-        isSshWorkspace(other) &&
+        isSshWorktreeWorkspace(other) &&
         other.backend.hostId === workspace.backend.hostId &&
         other.backend.remoteRepoPath === workspace.backend.remoteRepoPath;
       if (other === workspace || (sameClone && !workspaceProject(other))) {
@@ -272,7 +276,7 @@ export class SshWorkspaceAdoption {
   /** Matches repositories on an SSH host to local projects, as SSH Workspace Sync does. */
   async sshRepositoryProjectLookup(): Promise<
     (
-      backend: Pick<SshWorkspaceBackend, 'hostId' | 'remoteRepoPath' | 'gitUrl'>
+      backend: Pick<SshWorktreeBackend, 'hostId' | 'remoteRepoPath' | 'gitUrl'>
     ) => string | undefined
   > {
     const projectsByRemote = await this.projectsByGitRemote();
@@ -285,12 +289,12 @@ export class SshWorkspaceAdoption {
    * origin is the same repository.
    */
   sshRepositoryProject(
-    backend: Pick<SshWorkspaceBackend, 'hostId' | 'remoteRepoPath' | 'gitUrl'>,
+    backend: Pick<SshWorktreeBackend, 'hostId' | 'remoteRepoPath' | 'gitUrl'>,
     projectsByRemote: ReadonlyMap<string, Project>
   ): Project | undefined {
     for (const other of workspaceStore.workspaces.values()) {
       if (
-        !isSshWorkspace(other) ||
+        !isSshWorktreeWorkspace(other) ||
         other.backend.hostId !== backend.hostId ||
         other.backend.remoteRepoPath !== backend.remoteRepoPath
       ) {

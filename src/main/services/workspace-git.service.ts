@@ -1,7 +1,11 @@
 import { projectRepoPath } from '../../shared/lib/project-repo-path';
 import { toGitBranchQuickStatus } from '../../shared/lib/workspace-branch-status';
 import { hasWorkspaceFiles } from '../../shared/lib/workspace-provision-state';
-import { isSshWorkspace, resolveWorkspaceTargetBranch } from '../../shared/types/workspace';
+import {
+  isSshWorkspace,
+  isSshWorktreeWorkspace,
+  resolveWorkspaceTargetBranch,
+} from '../../shared/types/workspace';
 import { createLogger } from '../lib/logger';
 
 import { gitService } from './git.service';
@@ -411,7 +415,7 @@ class WorkspaceGitService {
     pushResult: WorkspaceGitPushResult,
     onLocalProjectSync?: WorkspaceGitLocalSyncProgress
   ): Promise<WorkspaceGitPushResult> {
-    if (!pushResult.success || workspace.backend?.kind !== 'ssh' || !workspace.projectId) {
+    if (!pushResult.success || !isSshWorktreeWorkspace(workspace) || !workspace.projectId) {
       return pushResult;
     }
 

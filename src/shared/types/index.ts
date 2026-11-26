@@ -49,6 +49,8 @@ export type {
   SetupActivityRun,
   SetupActivityState,
   SshWorkspaceBackend,
+  SshWorktreeBackend,
+  SshScratchBackend,
   LocalWorkspaceBackend,
 } from './workspace';
 export {
@@ -59,6 +61,7 @@ export {
   getWorkspaceCwdIdentity,
   canDeleteWorkspaceBranch,
   isSshWorkspace,
+  isSshWorktreeWorkspace,
   isWorkspaceAttentionActionable,
   isWorkspaceSnoozed,
   isWorkspaceCreateError,

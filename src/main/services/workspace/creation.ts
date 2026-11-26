@@ -22,6 +22,7 @@ import {
 } from '../../../shared/lib/workspace-provision-state';
 import {
   isSshWorkspace,
+  isSshWorktreeWorkspace,
   SshProjectNeedsRemoteError,
   type WorkspaceBackend,
 } from '../../../shared/types/workspace';
@@ -55,7 +56,8 @@ import { initialSidebarView } from './initial-sidebar-view';
 import {
   assertScratchParams,
   createScratchFolder,
-  removeScratchFolderAt,
+  createSshScratchFolder,
+  removeUnpublishedScratchFolder,
   type ScratchFolder,
 } from './scratch';
 import { workspaceStore } from './store';
@@ -169,8 +171,8 @@ export class WorkspaceCreation {
         ...config,
         sshHosts: configuredSshHosts,
       });
-      // SSH hosts only run worktrees, so a folder opens locally instead.
-      if (params.mode === 'directory' && decision.environment.kind === 'ssh') {
+      // SSH hosts run worktrees and scratch folders, so any other folder opens locally instead.
+      if (params.mode === 'directory' && !params.scratch && decision.environment.kind === 'ssh') {
         decision.environment = { kind: 'local' };
         decision.issue = undefined;
       }
@@ -186,12 +188,14 @@ export class WorkspaceCreation {
       if (shouldValidateConfiguredHost && !sshHostService.has(environment.hostId)) {
         throw new Error('The selected SSH host is no longer configured.');
       }
-      const sourceWorkspace = params.sourceWorkspaceId
-        ? workspaceStore.workspaces.get(params.sourceWorkspaceId)
-        : undefined;
+      // A scratch folder is new, so it shares no repository with the workspace it came from.
+      const sourceWorkspace =
+        params.sourceWorkspaceId && !params.scratch
+          ? workspaceStore.workspaces.get(params.sourceWorkspaceId)
+          : undefined;
       const matchingSourceBackend =
         sourceWorkspace &&
-        isSshWorkspace(sourceWorkspace) &&
+        isSshWorktreeWorkspace(sourceWorkspace) &&
         sourceWorkspace.backend.hostId === environment.hostId &&
         sourceWorkspace.projectId === (params.projectId ?? null)
           ? sourceWorkspace.backend
@@ -244,7 +248,10 @@ export class WorkspaceCreation {
     assertScratchParams(params);
     if (!params.scratch) return this.createResolvedIn(params);
     await assertPromptAttachmentsExist(params);
-    const folder = createScratchFolder();
+    const folder =
+      params.location?.kind === 'ssh'
+        ? await this.createSshScratchFolder(params.location.hostId)
+        : createScratchFolder();
     try {
       return await this.createResolvedIn(params, folder);
     } catch (error) {
@@ -253,7 +260,7 @@ export class WorkspaceCreation {
         (workspace) => workspace.workingDirectory === folder.path
       );
       if (!published) {
-        await removeScratchFolderAt(folder.path).catch((cleanupError: unknown) => {
+        await removeUnpublishedScratchFolder(folder).catch((cleanupError: unknown) => {
           logger.warn(
             'Could not remove the folder of a scratch workspace not created',
             cleanupError
@@ -281,7 +288,13 @@ export class WorkspaceCreation {
     let backend: WorkspaceBackend | undefined;
     let prepareCreatedSshWorkspace: ((workspace: Workspace) => Promise<void>) | undefined;
 
-    if (params.location?.kind === 'ssh') {
+    if (scratchFolder) {
+      workingDirectory = scratchFolder.path;
+      backend = scratchFolder.backend;
+      params.name ||= branchSuffixToName(scratchFolder.suffix);
+      isWorktree = false;
+      projectId = null;
+    } else if (params.location?.kind === 'ssh') {
       if (params.mode !== 'worktree') {
         throw new Error('SSH workspaces only support worktree mode');
       }
@@ -404,11 +417,6 @@ export class WorkspaceCreation {
       isWorktree = true;
       projectId = params.projectId;
       repoName = project.name;
-    } else if (scratchFolder) {
-      workingDirectory = scratchFolder.path;
-      params.name ||= branchSuffixToName(scratchFolder.suffix);
-      isWorktree = false;
-      projectId = null;
     } else {
       workingDirectory = this.resolveDirectoryWorkingDirectory(params);
       isWorktree = false;
@@ -663,6 +671,14 @@ export class WorkspaceCreation {
     });
 
     return workspace;
+  }
+
+  /** Makes a scratch folder on the host, where the companion its terminals use then installs. */
+  private async createSshScratchFolder(hostId: string): Promise<ScratchFolder> {
+    const folder = await createSshScratchFolder(hostId);
+    // Making the folder resolved the base path, so the install reuses its connection.
+    this.startSshHostPreparation(hostId, true);
+    return folder;
   }
 
   /**

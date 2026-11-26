@@ -231,6 +231,20 @@ describe('SSH workspace manifest', () => {
     expect(buildSshWorkspaceManifest(sshWorkspace({ provisioning: true }), 1)).toBe(undefined);
   });
 
+  it('has no manifest for a scratch folder, which stays with the installation that made it', () => {
+    const scratch = sshWorkspace({
+      backend: {
+        kind: 'ssh',
+        hostId: 'ssh-dev',
+        remoteDirectory: '/home/dev/.komla/scratch/swift-fox',
+        scratch: true,
+      },
+      scratch: true,
+      isWorktree: false,
+    });
+    expect(buildSshWorkspaceManifest(scratch, 1)).toBe(undefined);
+  });
+
   it('round-trips a manifest and rejects untrusted content', () => {
     const manifest = buildSshWorkspaceManifest(sshWorkspace(), 5, {
       agentName: 'Claude Code',

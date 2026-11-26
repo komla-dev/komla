@@ -2,7 +2,11 @@ import { existsSync } from 'fs';
 import { dirname } from 'path';
 
 import { isProvisioning } from '../../../shared/lib/workspace-provision-state';
-import { canDeleteWorkspaceBranch, isSshWorkspace } from '../../../shared/types/workspace';
+import {
+  canDeleteWorkspaceBranch,
+  isSshWorkspace,
+  isSshWorktreeWorkspace,
+} from '../../../shared/types/workspace';
 import { createLogger } from '../../lib/logger';
 import { deleteReleasingOpenCodeLocation } from '../../lib/opencode-service';
 import { isSamePath } from '../../lib/same-path';
@@ -347,7 +351,14 @@ export class WorkspaceLifecycle {
     if (options.skipBackendCleanup) {
       // Backend already gone or intentionally left in place, along with its manifest.
       await this.deps.sshSync.deleted(workspace, { leftOnHost: true });
-    } else if (isSshWorkspace(workspace)) {
+    } else if (isSshWorkspace(workspace) && workspace.backend.scratch) {
+      // Its folder is Komla's; failing keeps the workspace so deleting can be retried.
+      if (workspace.scratch && !this.scratchFolderInUse(workspace)) {
+        await removeScratchFolder(workspace);
+      }
+      // It never had a manifest on the host, so there is none to replace with a tombstone.
+      await this.deps.sshSync.deleted(workspace, { leftOnHost: true });
+    } else if (isSshWorktreeWorkspace(workspace)) {
       await sshWorkspaceService.deleteWorkspace(
         workspace.backend,
         deletesBranch,
@@ -426,14 +437,21 @@ export class WorkspaceLifecycle {
   private scratchFolderInUse(workspace: Workspace): boolean {
     const folder = workspace.workingDirectory;
     for (const other of workspaceStore.workspaces.values()) {
-      if (
-        other.id !== workspace.id &&
-        !isSshWorkspace(other) &&
-        isSamePath(other.workingDirectory, folder)
-      ) {
+      if (other.id === workspace.id) continue;
+      if (isSshWorkspace(workspace)) {
+        if (
+          isSshWorkspace(other) &&
+          other.backend.hostId === workspace.backend.hostId &&
+          other.backend.remoteDirectory === workspace.backend.remoteDirectory
+        ) {
+          return true;
+        }
+      } else if (!isSshWorkspace(other) && isSamePath(other.workingDirectory, folder)) {
         return true;
       }
     }
+    // Folder projects are on this computer.
+    if (isSshWorkspace(workspace)) return false;
     return projectService
       .list()
       .some(

@@ -50,7 +50,7 @@ function getSshCreatePrUrl(
   branch = backend.branchName,
   target = backend.baseBranch
 ): string | null {
-  if (!branch || !target) return null;
+  if (backend.scratch || !branch || !target) return null;
 
   let webUrl: string;
   let hostname: string;

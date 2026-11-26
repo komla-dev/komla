@@ -15,19 +15,22 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { useProjectsStore } from '@/stores/projects.store';
 import { useToastStore } from '@/stores/toast.store';
-import { isSshWorkspace, type Project, type Workspace } from '@/types';
+import {
+  isSshWorktreeWorkspace,
+  type Project,
+  type SshWorktreeBackend,
+  type Workspace,
+} from '@/types';
 
 import type { WorkspaceGroup } from './workspace-list-ordering';
 
-type SshWorkspace = Workspace & {
-  backend: Extract<Workspace['backend'], { kind: 'ssh' }>;
-};
+type SshWorkspace = Workspace & { backend: SshWorktreeBackend };
 
 /** The SSH workspaces in a group with no project here, e.g. ones added from another device. */
 export function sshWorkspacesWithoutProject(group: WorkspaceGroup): SshWorkspace[] {
   if (group.projectId || group.isDirectory) return [];
   return group.workspaces.filter((workspace): workspace is SshWorkspace =>
-    isSshWorkspace(workspace)
+    isSshWorktreeWorkspace(workspace)
   );
 }
 

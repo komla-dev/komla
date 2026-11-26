@@ -321,6 +321,19 @@ function normalizeWorkspaceBackend(value: unknown): WorkspaceBackend | undefined
   if (backend.kind === 'local') return { kind: 'local' };
   if (
     backend.kind === 'ssh' &&
+    backend.scratch === true &&
+    typeof backend.hostId === 'string' &&
+    typeof backend.remoteDirectory === 'string'
+  ) {
+    return {
+      kind: 'ssh',
+      hostId: backend.hostId,
+      remoteDirectory: backend.remoteDirectory,
+      scratch: true,
+    };
+  }
+  if (
+    backend.kind === 'ssh' &&
     typeof backend.hostId === 'string' &&
     typeof backend.remoteDirectory === 'string' &&
     typeof backend.remoteRepoPath === 'string' &&

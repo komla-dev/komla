@@ -1,5 +1,5 @@
 import type {
-  SshWorkspaceBackend,
+  SshWorktreeBackend,
   WorkspaceCustomNameSource,
   WorkspaceStatus,
   WorkspaceTerminalLayout,
@@ -34,7 +34,7 @@ export interface SshWorkspaceManifest {
   branchName?: string;
   baseBranch?: string;
   repoName?: string;
-  backend: Omit<SshWorkspaceBackend, 'kind' | 'hostId' | 'projectId'>;
+  backend: Omit<SshWorktreeBackend, 'kind' | 'hostId' | 'projectId' | 'scratch'>;
   terminals: Array<{
     id: string;
     name: string;

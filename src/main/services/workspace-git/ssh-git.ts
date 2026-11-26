@@ -24,6 +24,7 @@ import {
 } from '../git/git-history';
 import { originTipsArgs, parseOriginTips, type OriginTips } from '../git/origin-tips';
 import { remoteCompanionService } from '../remote-companion.service';
+import { sshWorkspaceBasePath } from '../ssh-workspace-base-path';
 import { sshWorkspaceService } from '../ssh-workspace.service';
 
 import {
@@ -145,7 +146,7 @@ function parseRemoteGitError(error: unknown, fallback: string): string {
 }
 
 function getRemoteBasePath(backend: SshWorkspaceBackend): string {
-  return pathPosix.dirname(pathPosix.dirname(backend.remoteProjectRoot));
+  return sshWorkspaceBasePath(backend);
 }
 
 function getRemoteCliPath(backend: SshWorkspaceBackend): string {

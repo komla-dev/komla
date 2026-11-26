@@ -40,6 +40,7 @@ import {
   KOMLA_FILES_GITIGNORE,
   KOMLA_FILES_GITIGNORE_CONTENT,
 } from './git/git-status';
+import { FOLDER_FILE_LIMIT } from './git/list-folder-files';
 import { gitService } from './git.service';
 import { htmlPreviewService } from './html-preview.service';
 import { localCopyService } from './local-copy.service';
@@ -53,6 +54,7 @@ import {
   type ContentSearchOptions,
   type ContentSearchResult,
 } from './search.service';
+import { sshWorkspaceBasePath } from './ssh-workspace-base-path';
 import { sshWorkspaceService } from './ssh-workspace.service';
 import { workspaceStore } from './workspace/store';
 import { workspaceStatusService } from './workspace-status.service';
@@ -354,6 +356,24 @@ function fileListFingerprint(listed: Buffer, deleted: Buffer): string {
   return createHash('sha256').update(listed).update('\0').update(deleted).digest('hex');
 }
 
+/** Folders a listing outside a repository skips, as a local folder's does. */
+const REMOTE_SKIPPED_FOLDERS = ['.git', 'node_modules', '.venv', '__pycache__'];
+/**
+ * How much of a listing outside a repository comes back: enough for the file limit at the
+ * usual path lengths, so a folder that fills up with a build or clone still lists quickly.
+ */
+const REMOTE_FOLDER_LIST_BYTES = 4 * 1024 * 1024;
+/** The whole files of a listing outside a repository, which stops mid-name at its size. */
+function folderListFiles(listed: Buffer): string[] {
+  const files = splitNullSeparated(listed);
+  if (listed.length >= REMOTE_FOLDER_LIST_BYTES && listed.at(-1) !== 0) files.pop();
+  return files.slice(0, FOLDER_FILE_LIMIT).map(withoutDotSlash);
+}
+/** A path as `find .` prints it, without its leading `./`, as `git ls-files` prints it. */
+function withoutDotSlash(filePath: string): string {
+  return filePath.startsWith('./') ? filePath.slice(2) : filePath;
+}
+
 class WorkspaceFileService {
   // Each SSH workspace's running content search, stopped when a newer one starts.
   private readonly contentSearches = new Map<string, AbortController>();
@@ -368,12 +388,19 @@ class WorkspaceFileService {
     }
 
     logger.debug('listing SSH workspace files', { workspaceId, includeGitIgnored });
+    const inRepository = !workspace.backend.scratch;
     const script = [
       this.remoteBase64Function(),
       this.remoteBase64AvailabilityCheck(),
       this.remoteFileListFunction(),
       `komla_files_dir=${shellQuotePosix(KOMLA_FILES_DIR)}`,
-      'files_b64=$(git ls-files --cached --others --exclude-standard -z | komla_list_b64)',
+      // A scratch folder isn't a repository, even inside one such as a home folder's dotfiles,
+      // so it lists as a local folder does.
+      ...(inRepository
+        ? ['files_b64=$(git ls-files --cached --others --exclude-standard -z | komla_list_b64)']
+        : [
+            `files_b64=$(find . \\( ${REMOTE_SKIPPED_FOLDERS.map((name) => `-name ${shellQuotePosix(name)}`).join(' -o ')} -o -path "./$komla_files_dir" \\) -prune -o -type f ! -name .DS_Store -print0 | head -c ${REMOTE_FOLDER_LIST_BYTES} | komla_list_b64)`,
+          ]),
       'komla_files_b64=$({',
       '  if [ -d "$komla_files_dir" ] && [ ! -L "$komla_files_dir" ]; then',
       // The folder's own ignore file stays out; an import with that name doesn't.
@@ -385,8 +412,8 @@ class WorkspaceFileService {
       '    fi',
       '  fi',
       '} | komla_list_b64)',
-      'deleted_b64=$(git ls-files --deleted -z | komla_list_b64)',
-      includeGitIgnored
+      inRepository ? 'deleted_b64=$(git ls-files --deleted -z | komla_list_b64)' : 'deleted_b64=',
+      inRepository && includeGitIgnored
         ? 'ignored_b64=$(git ls-files --others --ignored --exclude-standard -z | komla_list_b64)'
         : 'ignored_b64=',
       'printf "STATUS=OK\\nENCODING=%s\\nFILES=%s\\nKOMLA_FILES=%s\\nIGNORED=%s\\nDELETED=%s\\n" "$komla_list_encoding" "$files_b64" "$komla_files_b64" "$ignored_b64" "$deleted_b64"',
@@ -396,7 +423,7 @@ class WorkspaceFileService {
     const lists = await decodeFileLists(values, ['FILES', 'KOMLA_FILES', 'IGNORED', 'DELETED']);
     const deletedFiles = new Set(splitNullSeparated(lists.DELETED));
     const files = [
-      ...splitNullSeparated(lists.FILES),
+      ...(inRepository ? splitNullSeparated(lists.FILES) : folderListFiles(lists.FILES)),
       ...splitNullSeparated(lists.KOMLA_FILES),
     ].filter((filePath) => !deletedFiles.has(filePath));
     // All of the folder is ignored, as git's exclude file lists it.
@@ -445,7 +472,7 @@ class WorkspaceFileService {
     try {
       const companionPath = await remoteCompanionService.ensureInstalled(
         host,
-        pathPosix.dirname(pathPosix.dirname(workspace.backend.remoteProjectRoot))
+        sshWorkspaceBasePath(workspace.backend)
       );
       if (controller.signal.aborted) return [];
       const args = [

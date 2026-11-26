@@ -6,7 +6,7 @@ const SKIPPED_FOLDERS = new Set(['.git', 'node_modules', '.venv', '__pycache__']
 const SKIPPED_FILES = new Set(['.DS_Store']);
 
 /** Enough for any folder worth browsing; past it, a home folder would take minutes. */
-const DEFAULT_LIMIT = 20_000;
+export const FOLDER_FILE_LIMIT = 20_000;
 // Folders read at once, so a wide level doesn't take one round trip per folder.
 const READS_AT_ONCE = 32;
 
@@ -24,7 +24,7 @@ async function readFolder(folder: string) {
  */
 export async function listFolderFiles(
   root: string,
-  { limit = DEFAULT_LIMIT }: { limit?: number } = {}
+  { limit = FOLDER_FILE_LIMIT }: { limit?: number } = {}
 ): Promise<string[]> {
   const files: string[] = [];
   let level = [root];

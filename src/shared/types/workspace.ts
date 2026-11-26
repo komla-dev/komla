@@ -270,10 +270,12 @@ export interface LocalWorkspaceBackend {
   kind: 'local';
 }
 
-export interface SshWorkspaceBackend {
+/** An SSH workspace's git worktree, checked out from a clone Komla keeps on the host. */
+export interface SshWorktreeBackend {
   kind: 'ssh';
   hostId: string;
   remoteDirectory: string;
+  scratch?: undefined;
   remoteRepoPath: string;
   remoteProjectRoot: string;
   gitUrl: string;
@@ -286,6 +288,24 @@ export interface SshWorkspaceBackend {
   defaultBranch?: string;
   startPoint?: string;
 }
+
+/** A Scratch workspace's empty folder, which Komla makes on the host outside any project. */
+export interface SshScratchBackend {
+  kind: 'ssh';
+  hostId: string;
+  remoteDirectory: string;
+  scratch: true;
+  // A scratch folder has no repository, project or branch.
+  projectId?: undefined;
+  projectName?: undefined;
+  branchName?: undefined;
+  checkoutExistingBranch?: undefined;
+  baseBranch?: undefined;
+  defaultBranch?: undefined;
+  startPoint?: undefined;
+}
+
+export type SshWorkspaceBackend = SshWorktreeBackend | SshScratchBackend;
 
 export type WorkspaceBackend = LocalWorkspaceBackend | SshWorkspaceBackend;
 
@@ -560,7 +580,7 @@ export interface CreateWorkspaceParams {
         gitUrl?: string;
         // Internal: preserve the exact managed repository roots when creating
         // a sibling of an existing SSH workspace.
-        sourceBackend?: SshWorkspaceBackend;
+        sourceBackend?: SshWorktreeBackend;
       };
 }
 
@@ -568,6 +588,13 @@ export function isSshWorkspace<T extends Pick<Workspace, 'backend'>>(
   workspace: T
 ): workspace is T & { backend: SshWorkspaceBackend } {
   return workspace.backend?.kind === 'ssh';
+}
+
+/** An SSH workspace in a worktree of a clone on its host, as every SSH workspace but a scratch one is. */
+export function isSshWorktreeWorkspace<T extends Pick<Workspace, 'backend'>>(
+  workspace: T
+): workspace is T & { backend: SshWorktreeBackend } {
+  return workspace.backend?.kind === 'ssh' && !workspace.backend.scratch;
 }
 
 export function resolveWorkspaceTargetBranch(

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'fs';
-import { join, posix as pathPosix } from 'path';
+import { join } from 'path';
 
 import { BrowserWindow } from 'electron';
 
@@ -61,6 +61,7 @@ import {
 } from './remote-workspace-observation.service';
 import { sshHostService } from './ssh-host.service';
 import { sshPortForwardService } from './ssh-port-forward.service';
+import { sshWorkspaceBasePath } from './ssh-workspace-base-path';
 import { configureSshWorkspaceProvisioning } from './ssh-workspace-provisioning.service';
 import { sshWorkspaceSyncHost } from './ssh-workspace-sync/host';
 import { SshWorkspaceSync } from './ssh-workspace-sync/ssh-workspace-sync';
@@ -369,7 +370,7 @@ class WorkspaceService {
       installCompanion: (backend) =>
         remoteCompanionService.ensureInstalled(
           sshWorkspaceService.getHost(backend.hostId),
-          pathPosix.dirname(pathPosix.dirname(backend.remoteProjectRoot))
+          sshWorkspaceBasePath(backend)
         ),
       ssh: sshWorkspaceService,
     });
@@ -755,6 +756,10 @@ class WorkspaceService {
       throw new Error(`Workspace ${workspaceId} is being deleted`);
     }
     if (!workspace.scratch) return workspace;
+    // Only folders on this computer open as workspaces of their own.
+    if (isSshWorkspace(workspace)) {
+      throw new Error("A scratch workspace's folder on an SSH host can't be kept");
+    }
     // Restoring from the Trash doesn't move a folder into its project.
     if (workspace.status !== 'active') {
       throw new Error('Restore the scratch workspace before keeping its folder');

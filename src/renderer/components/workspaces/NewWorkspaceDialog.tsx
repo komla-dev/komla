@@ -644,8 +644,10 @@ export function NewWorkspaceDialog({ open, onOpenChange }: NewWorkspaceDialogPro
   const scratchSelected = projectId === SCRATCH_PICK;
   const effectiveProjectId = scratchSelected ? '' : projectId || initialProjectId;
   const selectedProject = projects.find((p) => p.id === effectiveProjectId);
-  // A scratch folder, like a folder project's, is on this computer and has no branches.
-  const selectedProjectIsDirectory = scratchSelected || selectedProject?.kind === 'directory';
+  // A folder project's folder is on this computer. A scratch folder can be on an SSH host too.
+  const selectedProjectIsFolder = selectedProject?.kind === 'directory';
+  // Neither has branches.
+  const selectedProjectIsDirectory = scratchSelected || selectedProjectIsFolder;
   const selectedProjectPrefix = resolveBranchPrefix(selectedProject, config?.gitDefaults);
   const canLaunchMultiple =
     mode === 'worktree' && branchMode === 'new' && !selectedProjectIsDirectory;
@@ -758,7 +760,7 @@ export function NewWorkspaceDialog({ open, onOpenChange }: NewWorkspaceDialogPro
   // A pick sticks for later workspaces; a fork's prefill applies only to this one.
   const handleEnvironmentChange = (environment: DesiredWorkspaceEnvironment) => {
     // A folder project is on this computer, so an SSH host takes a Git project instead.
-    if (environment.kind === 'ssh' && selectedProjectIsDirectory) {
+    if (environment.kind === 'ssh' && selectedProjectIsFolder) {
       setProjectId(projectsByRecentUse.find((project) => project.kind !== 'directory')?.id ?? '');
     }
     setLaunchTarget(environment.kind === 'ssh' ? 'ssh' : 'local');
@@ -800,10 +802,10 @@ export function NewWorkspaceDialog({ open, onOpenChange }: NewWorkspaceDialogPro
   // A folder project picked while an SSH host was last used opens here, on this computer. It
   // isn't saved as the location for later workspaces, as a pick of one is.
   useEffect(() => {
-    if (!isSshLaunch || !selectedProjectIsDirectory) return;
+    if (!isSshLaunch || !selectedProjectIsFolder) return;
     setLaunchTarget('local');
     setSshHostId('');
-  }, [isSshLaunch, selectedProjectIsDirectory]);
+  }, [isSshLaunch, selectedProjectIsFolder]);
 
   useEffect(() => {
     if (sshHosts.length === 0) {
@@ -1710,8 +1712,9 @@ export function NewWorkspaceDialog({ open, onOpenChange }: NewWorkspaceDialogPro
           availableReasoningLevels.length > 0 ? effectiveReasoningLevelId : undefined,
         modelId: availableModels.length > 0 ? effectiveModelId : undefined,
         presetId: effectiveSelectedPresetId ?? undefined,
-        // The folder is on this computer, even when an SSH host was picked.
-        environment: isSshLaunch ? { kind: 'local' } : effectiveEnvironment,
+        // A folder is on this computer, even when an SSH host was picked; a scratch folder is
+        // made where the workspace runs.
+        environment: 'scratch' in folder || !isSshLaunch ? effectiveEnvironment : { kind: 'local' },
       },
       actionUsage
     );

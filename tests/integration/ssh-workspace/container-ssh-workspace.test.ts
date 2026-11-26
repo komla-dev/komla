@@ -450,6 +450,38 @@ describe('SSH remote workspace through Docker OpenSSH', () => {
     2 * 60_000
   );
 
+  it('makes a scratch folder on the host and deletes it with everything in it', async () => {
+    const { sshWorkspaceService } = sshWorkspaceModule;
+
+    const backend = await sshWorkspaceService.createScratchFolder(target.host.id, [
+      'real-ssh-scratch',
+    ]);
+    expect(backend).toEqual({
+      kind: 'ssh',
+      hostId: target.host.id,
+      remoteDirectory: `${target.resolvedBasePath}/scratch/real-ssh-scratch`,
+      scratch: true,
+    });
+    await container.exec([
+      'sh',
+      '-lc',
+      `mkdir ${shellQuote(`${backend.remoteDirectory}/src`)} && echo 1 > ${shellQuote(
+        `${backend.remoteDirectory}/src/main.py`
+      )}`,
+    ]);
+
+    await sshWorkspaceService.deleteScratchFolder(backend);
+
+    const gone = await container.exec(['test', '-e', backend.remoteDirectory], {
+      allowFailure: true,
+    });
+    expect(gone.exitCode).not.toBe(0);
+    const root = await container.exec(['test', '-d', `${target.resolvedBasePath}/scratch`], {
+      allowFailure: true,
+    });
+    expect(root.exitCode).toBe(0);
+  });
+
   it('checks out an existing branch with upstream tracking through real SSH', async () => {
     const { sshWorkspaceService } = sshWorkspaceModule;
     const branchName = 'integration/existing';
@@ -2433,6 +2465,37 @@ describe('Komla Remote Companion through Docker OpenSSH', () => {
           allowFailure: true,
         })
         .catch(() => {});
+      await fixture.cleanup();
+    }
+  }, 90_000);
+
+  it('forwards a hook from a companion watching no repository, as on a host with only scratch folders', async () => {
+    const fixture = await startDirectCompanion('companion-hook-scratch', { workspaces: [] });
+    try {
+      await container.exec([
+        'sh',
+        '-lc',
+        [
+          `cd ${shellQuote(fixture.backend.remoteDirectory)}`,
+          `export KOMLA_TERMINAL_ID=${shellQuote(fixture.terminalId)}`,
+          `export KOMLA_COMPANION_INBOX=${shellQuote(fixture.inbox)}`,
+          'export KOMLA_COMPANION_SESSION=komla-direct-keep',
+          'export KOMLA_COMPANION_TMUX_SOCKET=komla-v1',
+          `printf '%s' '{"prompt":"Review scratch hook"}' | ${shellQuote(
+            `${target.resolvedBasePath}/helpers/notify.sh`
+          )} --source claude-code --event UserPromptSubmit`,
+        ].join(' && '),
+      ]);
+      const delivery = await waitForRecordedCompanionPost(
+        fixture.recordPath,
+        (post) => post.path.endsWith('/notify') && post.payload.kind === 'prompt-submit'
+      );
+      expect(delivery.payload).toMatchObject({
+        terminalId: fixture.terminalId,
+        kind: 'prompt-submit',
+        hookInput: { prompt: 'Review scratch hook' },
+      });
+    } finally {
       await fixture.cleanup();
     }
   }, 90_000);

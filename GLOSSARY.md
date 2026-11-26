@@ -11,8 +11,10 @@ _Avoid_: Archive
 
 **Scratch workspace**:
 A workspace in an empty folder Komla makes for it under `~/.komla/scratch/`, outside any project,
-for work that may not last. Deleting it for good, as the Trash does after seven days, deletes the
-folder too, unless the user chose Keep Folder, which makes it an opened folder like any other.
+for work that may not last, on this computer or on the SSH host it starts on. Deleting it for good,
+as the Trash does after seven days, deletes the folder too, unless the user chose Keep Folder, which
+makes it an opened folder like any other. A folder on an SSH host can't be kept, since only folders
+on this computer open as workspaces of their own, and it stays with the installation that made it.
 _Avoid_: Temp workspace, sandbox
 
 **Open Existing Branch**:

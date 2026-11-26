@@ -1,6 +1,10 @@
 import { projectRepoPath } from '../../shared/lib/project-repo-path';
 import { isMonitored } from '../../shared/lib/terminal-execution-state';
-import { isSshWorkspace, type Workspace } from '../../shared/types/workspace';
+import {
+  isSshWorkspace,
+  isSshWorktreeWorkspace,
+  type Workspace,
+} from '../../shared/types/workspace';
 import { createLogger } from '../lib/logger';
 import { samePathKey } from '../lib/same-path';
 import { needsSshPrompt } from '../lib/ssh-client';
@@ -368,7 +372,7 @@ class GitBackgroundFetchService {
           .list()
           .filter(
             (workspace) =>
-              isSshWorkspace(workspace) &&
+              isSshWorktreeWorkspace(workspace) &&
               workspace.backend.hostId === hostId &&
               workspace.backend.remoteRepoPath === repoPath
           ),
@@ -393,7 +397,7 @@ class GitBackgroundFetchService {
     // Workspaces on a host share its clone, so each clone is fetched once.
     const clones = new Map<string, { hostId: string; repoPath: string; workspaces: Workspace[] }>();
     for (const workspace of workspaceService.list()) {
-      if (!isSshWorkspace(workspace) || !gitProjectIds.has(workspace.projectId)) continue;
+      if (!isSshWorktreeWorkspace(workspace) || !gitProjectIds.has(workspace.projectId)) continue;
       const { hostId, remoteRepoPath } = workspace.backend;
       if (sshHostStatusService.get(hostId)?.state !== 'connected') continue;
       if (isSshHostDisconnected(hostId)) continue;
@@ -545,7 +549,7 @@ class GitBackgroundFetchService {
     const projectIds = new Set(projects.map((project) => project.id));
     const clones = new Map<string, { hostId: string; repoPath: string; workspaces: Workspace[] }>();
     for (const workspace of workspaceService.list()) {
-      if (!isSshWorkspace(workspace) || !workspace.projectId) continue;
+      if (!isSshWorktreeWorkspace(workspace) || !workspace.projectId) continue;
       if (!projectIds.has(workspace.projectId)) continue;
       const { hostId, remoteRepoPath } = workspace.backend;
       if (sshHostStatusService.get(hostId)?.state !== 'connected') continue;

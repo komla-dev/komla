@@ -8,7 +8,7 @@ import {
   type PullRequestTagState,
   type WorkspaceTagDefinition,
 } from '../../shared/lib/workspace-tags';
-import { COMMAND_ATTENTION_SOURCE, isSshWorkspace } from '../../shared/types/workspace';
+import { COMMAND_ATTENTION_SOURCE, isSshWorktreeWorkspace } from '../../shared/types/workspace';
 import { gitRemoteIdentity } from '../lib/git-remote-identity';
 import { createLogger } from '../lib/logger';
 import { MISSING_COMMAND_ERROR } from '../lib/missing-command';
@@ -502,7 +502,7 @@ export class PullRequestStatusService {
 
   /** For an SSH workspace on GitHub, the command that reads its branch's pull request here. */
   private localCommand(workspace: Workspace): string | undefined {
-    if (!isSshWorkspace(workspace)) return undefined;
+    if (!isSshWorktreeWorkspace(workspace)) return undefined;
     const repository = gitHubRepository(workspace.backend.gitUrl);
     const observed = this.branches.get(workspace.id);
     // Until the host reports the branch checked out, the one the workspace was made on.

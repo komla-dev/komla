@@ -5,6 +5,7 @@ import { hasWorkspaceFiles } from '../../../shared/lib/workspace-provision-state
 import {
   getBranchesInUse,
   isSshWorkspace,
+  isSshWorktreeWorkspace,
   resolveWorkspaceTargetBranch,
   toLocalBranchName,
 } from '../../../shared/types/workspace';
@@ -39,7 +40,7 @@ export async function getBranchCleanupScope(projectId: string, hostId: string | 
   const workspaces = workspaceStore.getWorkspacesByProjectId(projectId);
   if (hostId) {
     const backend = workspaces
-      .filter(isSshWorkspace)
+      .filter(isSshWorktreeWorkspace)
       .map((workspace) => workspace.backend)
       .find((candidate) => candidate.hostId === hostId);
     if (!backend) throw new Error('The project has no workspaces on this host');
@@ -48,7 +49,7 @@ export async function getBranchCleanupScope(projectId: string, hostId: string | 
     // Another project can share the clone when it has the same name and origin.
     const sharing = [...workspaceStore.workspaces.values()].filter(
       (workspace) =>
-        isSshWorkspace(workspace) &&
+        isSshWorktreeWorkspace(workspace) &&
         workspace.backend.hostId === hostId &&
         workspace.backend.remoteRepoPath === backend.remoteRepoPath
     );
@@ -124,7 +125,7 @@ export async function checkWorkspacesForCleanup(
     { repo: GitBatchRunner; targetBranch: string; heads: Array<WorktreeHead & { id: string }> }
   >();
   await mapWithConcurrency(workspaces, CHECK_CONCURRENCY, async (workspace) => {
-    const ssh = isSshWorkspace(workspace) ? workspace.backend : null;
+    const ssh = isSshWorktreeWorkspace(workspace) ? workspace.backend : null;
     const branch = toLocalBranchName(
       resolveWorkspaceTargetBranch(workspace, project.baseBranch) ?? ''
     );

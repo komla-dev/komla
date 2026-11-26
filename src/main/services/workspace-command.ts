@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from 'child_process';
-import { posix as pathPosix } from 'path';
 
 import { shellQuotePosix } from '../../shared/lib/shell-quote';
 import { isSshWorkspace, type SshWorkspaceBackend } from '../../shared/types';
@@ -12,6 +11,7 @@ import { configService } from './config.service';
 import { projectService } from './project.service';
 import { isSshHostDisconnected } from './ssh-host-disconnection';
 import { sshHostService } from './ssh-host.service';
+import { sshWorkspaceBasePath } from './ssh-workspace-base-path';
 import { joinRemote, remoteKomlaDataPort, sshWorkspaceService } from './ssh-workspace.service';
 
 import type { Workspace } from '../../shared/types/workspace';
@@ -175,10 +175,7 @@ export function runLocalCommand(
 /** The shell lines that let a command on an SSH host run `komla`, as the host's terminals can. */
 export function remoteKomlaCliSetup(backend: SshWorkspaceBackend): string[] {
   // Where Komla installs its helpers on the host, as for the host's terminals.
-  const helpers = joinRemote(
-    pathPosix.dirname(pathPosix.dirname(backend.remoteProjectRoot)),
-    'helpers'
-  );
+  const helpers = joinRemote(sshWorkspaceBasePath(backend), 'helpers');
   return [
     // The host reaches this Komla through its SSH tunnel.
     `export KOMLA_API_URL=${shellQuotePosix(`http://127.0.0.1:${remoteKomlaDataPort(backend.hostId)}`)}`,

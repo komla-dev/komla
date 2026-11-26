@@ -4,7 +4,9 @@ import { isMissingFromHost } from '../../../shared/lib/workspace-provision-state
 import { getWorkspaceDynamicTitle } from '../../../shared/lib/workspace-title';
 import {
   isSshWorkspace,
+  isSshWorktreeWorkspace,
   type SshWorkspaceBackend,
+  type SshWorktreeBackend,
   type Workspace,
   type WorkspaceStatus,
 } from '../../../shared/types/workspace';
@@ -119,7 +121,7 @@ export interface SshWorkspaceSyncHost {
 
 /** The parts of an SSH workspace's backend that identify its repository. */
 export type SshWorkspaceRepository = Pick<
-  SshWorkspaceBackend,
+  SshWorktreeBackend,
   'hostId' | 'remoteRepoPath' | 'gitUrl'
 >;
 
@@ -588,7 +590,7 @@ export class SshWorkspaceSync {
     const source = manifest.sourceWorkspaceId ? store.get(manifest.sourceWorkspaceId) : undefined;
     const sibling =
       source &&
-      isSshWorkspace(source) &&
+      isSshWorktreeWorkspace(source) &&
       source.backend.hostId === hostId &&
       source.backend.remoteRepoPath === remoteRepoPath
         ? source

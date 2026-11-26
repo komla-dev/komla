@@ -278,6 +278,8 @@ export class WorkspaceStatusService {
       await this.dependencies.restartLocalWatcher(workspace.id, workspace.workingDirectory);
       return;
     }
+    // A scratch folder on a host isn't a repository, so it has no status to read.
+    if (workspace.backend.scratch) return;
 
     const retainedWorkingTree =
       this.completeWorkingTrees.get(workspace.id) ?? workspace.lastKnownGitStatus?.diff;

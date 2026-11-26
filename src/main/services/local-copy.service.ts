@@ -61,8 +61,9 @@ class LocalCopyService {
     if (current) return current;
 
     const root = this.localCopyRoot();
-    const projectName =
-      backend.projectName || basename(backend.remoteRepoPath).replace(/\.git$/i, '') || 'project';
+    const projectName = backend.scratch
+      ? 'scratch'
+      : backend.projectName || basename(backend.remoteRepoPath).replace(/\.git$/i, '') || 'project';
     const branchName = backend.branchName || basename(backend.remoteDirectory) || 'branch';
     const safeProject = sanitizeWorktreeProjectSegment(projectName);
     const safeBranch = sanitizeWorktreeProjectSegment(branchName);

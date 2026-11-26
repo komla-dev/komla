@@ -2050,7 +2050,7 @@ function WorkspaceMenuItems({
         </ContextMenuItem>
       )}
       <CopyWorkspaceSubmenu workspace={workspace} />
-      {workspace.scratch && workspace.status === 'active' && (
+      {workspace.scratch && !isSshWorkspace(workspace) && workspace.status === 'active' && (
         <ContextMenuItem onClick={() => void keepScratchFolder(workspace.id)}>
           <FolderStar />
           Keep Folder

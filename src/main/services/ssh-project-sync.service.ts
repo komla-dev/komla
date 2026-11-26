@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
-import { isSshWorkspace } from '../../shared/types/workspace';
+import { isSshWorktreeWorkspace } from '../../shared/types/workspace';
 import { writeFileAtomic } from '../lib/atomic-write';
 
 import { actionService } from './action.service';
@@ -29,7 +29,7 @@ export const sshProjectSync = new SshProjectSync({
     onHost: (hostId) => {
       const found = new Map<string, { project: Project; gitUrl: string }>();
       for (const workspace of workspaceService.list()) {
-        if (!isSshWorkspace(workspace) || workspace.backend.hostId !== hostId) continue;
+        if (!isSshWorktreeWorkspace(workspace) || workspace.backend.hostId !== hostId) continue;
         const project = projectService.get(workspace.projectId);
         if (!project || project.kind === 'directory' || found.has(project.id)) continue;
         found.set(project.id, { project, gitUrl: workspace.backend.gitUrl });
