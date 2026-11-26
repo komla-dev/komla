@@ -689,6 +689,30 @@ export type KomlaOperation =
 
 type AgentLaunchOperation = Extract<KomlaOperation, { type: 'agent.launch' }>;
 
+/**
+ * An SSH host only starts new branches, and finds a name it already has only after the launch
+ * answered, where the agent never sees the failure, so a taken name gets a number on its end.
+ */
+function withTakenSshBranchNumbered(params: CreateWorkspaceParams): CreateWorkspaceParams {
+  const onSshHost = params.environment?.kind === 'ssh' || params.location?.kind === 'ssh';
+  return params.branchName && onSshHost ? { ...params, autoResolveBranchConflicts: true } : params;
+}
+
+/**
+ * The new workspace's branch and folder, once settled: a branch that may yet get a number, and
+ * the folder named for it, are left for the workspace to report.
+ */
+function settledBranch(
+  created: KomlaOperationWorkspace,
+  params: CreateWorkspaceParams
+): { branch?: string; path?: string } {
+  if (isProvisioning(created) && params.autoResolveBranchConflicts) return {};
+  return {
+    ...(created.workingDirectory ? { path: created.workingDirectory } : {}),
+    ...(created.branchName ? { branch: created.branchName } : {}),
+  };
+}
+
 function currentBranchUnavailable(): KomlaOperationError {
   return new KomlaOperationError(
     'CURRENT_BRANCH_UNAVAILABLE',
@@ -1940,8 +1964,7 @@ export class KomlaOperationService {
       destination: {
         kind: 'workspace',
         workspaceId: created.id,
-        ...(created.workingDirectory ? { path: created.workingDirectory } : {}),
-        ...(created.branchName ? { branch: created.branchName } : {}),
+        ...settledBranch(created, params),
         ...(params.baseBranch ? { branchedFrom: params.baseBranch } : {}),
       },
       ...(selection.preset ? { agent: this.agentResult(selection) } : {}),
@@ -2158,7 +2181,7 @@ export class KomlaOperationService {
         400
       );
     }
-    return {
+    return withTakenSshBranchNumbered({
       mode,
       ...(project ? { projectId: project.id } : {}),
       customName: operation.name,
@@ -2182,7 +2205,7 @@ export class KomlaOperationService {
             sourceWorkspaceId: sourceWorkspace.id,
           }
         : {}),
-    };
+    });
   }
 
   /** The calling workspace a new workspace shares a repository with, if any. */

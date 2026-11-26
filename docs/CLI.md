@@ -202,8 +202,11 @@ means `me/login`, and only branches under the prefix can be opened this way. A b
 workspace has open is refused rather than renamed, and so is one checked out in a worktree outside
 Komla, since Git checks a branch out in one worktree at a time: remove that worktree first. A
 launch that lands on an SSH host, from an SSH workspace, an SSH host's shell or with agent launches
-set to start there, only starts new branches, and a name the host already has is refused; open an
-existing branch there from New Workspace, with Open on the branch in its branch picker.
+set to start there, only starts new branches. When the host already has the name, or another
+workspace there has it open, a number goes on its end, such as `fix-login-2`, since the host finds
+that out only after the launch answered; `komla workspace list` and the MCP `workspace_status` tool
+show the branch the workspace got. Open an existing branch there from New Workspace, with Open on
+the branch in its branch picker.
 
 `komla launch --draft` starts nothing: it opens New Workspace in the window showing the calling
 workspace, brought forward, with the prompt, project, agent (`--preset`), mode (`--mode`) and, with

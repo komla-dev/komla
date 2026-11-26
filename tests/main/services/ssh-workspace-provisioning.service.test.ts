@@ -278,6 +278,24 @@ describe('SSH Workspace repository provisioning', () => {
     expect(f.dependencies.persistWorkspaces).not.toHaveBeenCalled();
   });
 
+  it('tells how to open a branch the host has when the name was asked for exactly', async () => {
+    const f = setup();
+    f.ssh.ensureWorkspaceReady.mockRejectedValueOnce(conflict('SSH_BRANCH_ALREADY_EXISTS'));
+    const error = await f.module
+      .prepare(f.workspace, {
+        initialBranchName: 'feature',
+        params: {},
+        branchPrefix: '',
+        createPlan: plan,
+      })
+      .catch((caught: Error) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Branch "feature" already exists on the SSH host. Choose another name, or open the branch with Open in New Workspace\'s branch picker.'
+    );
+    expect(f.ssh.ensureWorkspaceReady).toHaveBeenCalledOnce();
+  });
+
   it('does not retry unrelated failures whose text mentions a conflict', async () => {
     const f = setup();
     f.ssh.ensureWorkspaceReady.mockRejectedValueOnce(

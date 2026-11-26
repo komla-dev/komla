@@ -85,7 +85,7 @@ export function createMcpServer(requestContext: KomlaOperationContext = {}): Mcp
         .string()
         .optional()
         .describe(
-          'Descriptive branch name for what is being worked on, e.g. "fix-login-redirect" or "add-search-api".'
+          'Descriptive branch name for what is being worked on, e.g. "fix-login-redirect" or "add-search-api". On an SSH host a name it already has gets a number on its end.'
         ),
       initialPrompt: z.string().optional().describe('Initial prompt to pass to the AI agent.'),
       fromCurrentBranch: z
@@ -112,7 +112,7 @@ export function createMcpServer(requestContext: KomlaOperationContext = {}): Mcp
             destination.kind === 'workspace' ? destination : {};
           const lines = [
             state === 'provisioning' && !branch
-              ? 'Workspace created — generating branch name in the background. The agent will start automatically once ready.'
+              ? 'Workspace created — its branch is settled in the background, and `komla workspace list` gives it then. The agent will start automatically once ready.'
               : 'Agent spawned in new workspace.',
           ];
           if (branch) lines.push(`Branch: ${branch}`);

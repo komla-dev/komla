@@ -234,7 +234,7 @@ export class SshWorkspaceProvisioningService {
           remoteConflictCount++;
           if (!shouldAutoResolve) {
             throw new Error(
-              `Branch "${branchName}" already exists on the SSH host. Choose a different branch or enable automatic conflict resolution.`
+              `Branch "${branchName}" already exists on the SSH host. Choose another name, or open the branch with Open in New Workspace's branch picker.`
             );
           }
         }

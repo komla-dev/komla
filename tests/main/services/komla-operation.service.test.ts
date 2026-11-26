@@ -1205,6 +1205,59 @@ describe('KomlaOperationService', () => {
     );
   });
 
+  it('numbers a branch an agent names when the SSH host has it, but opens it on this computer', async () => {
+    const created = {
+      id: 'workspace-2',
+      branchName: 'fix-login',
+      workingDirectory: 'ssh://ssh-1/srv/worktrees/fix-login',
+      provisioning: true,
+    };
+    const createWorkspace = vi.fn().mockResolvedValue(created);
+    const sshWorkspace = {
+      id: 'workspace-ssh',
+      projectId: 'project-1',
+      backend: { kind: 'ssh' as const, hostId: 'ssh-1', gitUrl: 'git@example/komla.git' },
+    };
+    const service = (pinnedHostId?: string) =>
+      new KomlaOperationService(
+        createDependencies({
+          getConfig: () => (pinnedHostId ? { agentLaunchDefaultSshHostId: pinnedHostId } : {}),
+          listProjects: () => [{ id: 'project-1', name: 'Komla', kind: 'git' }],
+          getProject: () => ({ id: 'project-1', name: 'Komla', kind: 'git' }),
+          findWorkspaceByTerminalId: (id) => (id === 'terminal-ssh' ? sshWorkspace : undefined),
+          createWorkspace,
+        })
+      );
+    const launch = { type: 'agent.launch', destination: 'workspace', branch: 'fix-login' } as const;
+
+    // The host only starts new branches, and finds the name taken after the launch answered,
+    // whether the host is pinned, the launch came through its tunnel or from a workspace on it.
+    for (const run of [
+      () => service('ssh-1').execute({}, { ...launch, project: 'Komla' }),
+      () => service().execute({ cwd: '/home/dev', sshHostId: 'ssh-1' }, { ...launch, project: 'Komla' }),
+      () => service().execute({ terminalId: 'terminal-ssh' }, launch),
+    ]) {
+      createWorkspace.mockClear();
+      // The branch may yet get a number, so the answer doesn't name one it may not get.
+      await expect(run()).resolves.toEqual({
+        state: 'provisioning',
+        destination: { kind: 'workspace', workspaceId: 'workspace-2' },
+      });
+      expect(createWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ branchName: 'fix-login', autoResolveBranchConflicts: true })
+      );
+    }
+
+    // Here a branch of that name is opened, and one another workspace has open is refused.
+    createWorkspace.mockResolvedValueOnce({ ...created, workingDirectory: '/worktrees/fix-login' });
+    await expect(service().execute({}, { ...launch, project: 'Komla' })).resolves.toMatchObject({
+      destination: { branch: 'fix-login', path: '/worktrees/fix-login' },
+    });
+    expect(createWorkspace).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ autoResolveBranchConflicts: expect.anything() })
+    );
+  });
+
   it('places agent-launched workspaces on the pinned SSH host', async () => {
     const createWorkspace = vi.fn().mockResolvedValue({ id: 'workspace-2' });
     const addAgentTab = vi.fn().mockResolvedValue({ id: 'terminal-2' });

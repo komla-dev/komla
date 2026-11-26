@@ -138,7 +138,9 @@ export function createOutsideAgentMcpServer(
         .min(1)
         .max(256)
         .optional()
-        .describe('A branch name, such as "fix-login-redirect". Komla names one otherwise.'),
+        .describe(
+          'A branch name, such as "fix-login-redirect". Komla names one otherwise. When the SSH host already has the name, a number goes on its end: workspace_status gives the branch the workspace got.'
+        ),
       agent: z
         .string()
         .min(1)
