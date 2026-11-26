@@ -290,3 +290,15 @@ hooks, the Plugin Host's port for plugin code, and `komla` in a panel's page. A 
 the capabilities it uses and refuses operations that need any other, so code that shows outside
 text can't launch an agent.
 _Avoid_: Plugin API, which names only one of its consumers
+
+## Remote Control
+
+**Outside Agent**:
+An AI agent or bot that runs outside Komla's terminals, on another machine on the user's tailnet,
+and reaches Komla over remote control's MCP route rather than through `komla` in a managed terminal.
+_Avoid_: Bot, external agent, remote agent
+
+**Agent Token**:
+The credential an Outside Agent holds, approved by the user with a trusted passkey and limited to
+chosen projects, agents and launch modes. It can start and list workspaces, never open a terminal.
+_Avoid_: API key, bot token, access grant
