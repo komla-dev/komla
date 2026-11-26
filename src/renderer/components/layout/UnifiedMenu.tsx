@@ -444,10 +444,8 @@ export function UnifiedMenu({ inStatusBar = false }: UnifiedMenuProps = {}) {
   const projectSyncStatus = useProjectSyncStatusStore((s) =>
     activeProject ? s.statuses.get(activeProject.id) : undefined
   );
-  const targetBranchHasRemote =
-    (isRemoteWorkspace ? gitStatus?.targetBranchHasRemote : projectSyncStatus?.hasRemote) ??
-    gitStatus?.targetBranchHasRemote ??
-    false;
+  // This workspace's own status, as the target branch menu reads it.
+  const targetBranchHasRemote = gitStatus?.targetBranchHasRemote ?? false;
   const lastFetched = projectSyncStatus?.lastFetched ?? null;
   const targetBranchWriteAction = resolveRemoteWriteAction({
     hasOriginRemote,

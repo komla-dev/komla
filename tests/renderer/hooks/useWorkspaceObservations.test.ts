@@ -16,6 +16,7 @@ vi.mock('../../../src/renderer/lib/terminal-renderer-runtime', () => ({
 import { useWorkspaceObservations } from '../../../src/renderer/hooks/useWorkspaceObservations';
 import { useFileListStore } from '../../../src/renderer/stores/file-list.store';
 import { useGitStatusStore } from '../../../src/renderer/stores/git-status.store';
+import { useProjectSyncStatusStore } from '../../../src/renderer/stores/project-sync-status.store';
 import { useProjectsStore } from '../../../src/renderer/stores/projects.store';
 import { useWorkspaceObservationStore } from '../../../src/renderer/stores/workspace-observation.store';
 import { useWorkspacesStore } from '../../../src/renderer/stores/workspaces.store';
@@ -66,6 +67,7 @@ describe('useWorkspaceObservations', () => {
     useFileListStore.setState(useFileListStore.getInitialState(), true);
     useGitStatusStore.setState(useGitStatusStore.getInitialState(), true);
     useProjectsStore.setState(useProjectsStore.getInitialState(), true);
+    useProjectSyncStatusStore.setState({ statuses: new Map() });
     useWorkspaceObservationStore.setState(useWorkspaceObservationStore.getInitialState(), true);
     useWorkspacesStore.setState({
       workspaces: [
@@ -121,6 +123,28 @@ describe('useWorkspaceObservations', () => {
       isLoading: false,
       hasFullDiff: false,
     });
+  });
+
+  it("keeps the SSH host clone's target counts out of the project's sync status", async () => {
+    // The host's clone lags origin after a push made locally, so it would read as ↓N there.
+    useWorkspacesStore.setState((state) => ({
+      workspaces: state.workspaces.map((workspace) => ({ ...workspace, projectId: 'project-1' })),
+    }));
+    window.api.getWorkspaceObservations = vi.fn(async () => [
+      {
+        ...persistedProjection,
+        branch: { ...persistedProjection.branch, targetBranchBehindRemote: 3 },
+      },
+    ]);
+
+    renderHook(() => useWorkspaceObservations());
+
+    await waitFor(() => {
+      expect(useGitStatusStore.getState().getStatus('ssh-ws')?.status).toMatchObject({
+        targetBranchBehindRemote: 3,
+      });
+    });
+    expect(useProjectSyncStatusStore.getState().statuses.get('project-1')).toBeUndefined();
   });
 
   it('leaves SSH file diffs to the worktree change that names the changed files', async () => {

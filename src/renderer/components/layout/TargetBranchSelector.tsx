@@ -180,15 +180,12 @@ export function TargetBranchSelector({ inStatusBar = false }: TargetBranchSelect
       activeProject?.baseBranch,
       gitStatus?.mainBranch
     ) || 'main';
-  const targetBranchAheadRemote = isRemoteWorkspace
-    ? (gitStatus?.targetBranchAheadRemote ?? 0)
-    : (projectSyncStatus?.aheadRemote ?? 0);
-  const targetBranchBehindRemote = isRemoteWorkspace
-    ? (gitStatus?.targetBranchBehindRemote ?? 0)
-    : (projectSyncStatus?.behindRemote ?? 0);
-  const targetBranchHasRemote = isRemoteWorkspace
-    ? (gitStatus?.targetBranchHasRemote ?? false)
-    : (projectSyncStatus?.hasRemote ?? false);
+  // This workspace's own status: it counts this workspace's target in the clone it lives in.
+  // The project's sync status is written by every workspace of the project, SSH ones and ones
+  // following other targets among them, so a push here could read back as that clone's ↓N.
+  const targetBranchAheadRemote = gitStatus?.targetBranchAheadRemote ?? 0;
+  const targetBranchBehindRemote = gitStatus?.targetBranchBehindRemote ?? 0;
+  const targetBranchHasRemote = gitStatus?.targetBranchHasRemote ?? false;
   const effectiveDefault =
     activeProject?.baseBranch ||
     sshBackend?.defaultBranch ||

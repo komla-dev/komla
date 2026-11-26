@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 
 import { getGitTargetStatusScope } from '@/lib/git-target-status-scope';
 import { useFileListStore } from '@/stores/file-list.store';
-import { useGitStatusStore } from '@/stores/git-status.store';
+import { localProjectIdOf, useGitStatusStore } from '@/stores/git-status.store';
 import { useProjectsStore } from '@/stores/projects.store';
 import { useWorkspaceObservationStore } from '@/stores/workspace-observation.store';
 import { useWorkspacesStore } from '@/stores/workspaces.store';
@@ -47,7 +47,7 @@ function applyProjection(
   );
   useGitStatusStore
     .getState()
-    .applyPushedStatus(workspace.id, branchStatus, workspace.projectId, targetStatusScope);
+    .applyPushedStatus(workspace.id, branchStatus, localProjectIdOf(workspace), targetStatusScope);
   if (branchStatus.currentBranch && branchStatus.currentBranch !== workspace.branchName) {
     workspacesStore.updateWorkspace(workspace.id, { branchName: branchStatus.currentBranch });
   }

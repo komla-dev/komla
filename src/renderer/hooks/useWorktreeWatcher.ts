@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 
 import { getGitTargetStatusScope } from '@/lib/git-target-status-scope';
 import { useFileListStore } from '@/stores/file-list.store';
-import { useGitStatusStore } from '@/stores/git-status.store';
+import { localProjectIdOf, useGitStatusStore } from '@/stores/git-status.store';
 import { useProjectsStore } from '@/stores/projects.store';
 import { useWorkspacesStore } from '@/stores/workspaces.store';
 import { useWorktreeEventsStore } from '@/stores/worktree-events.store';
@@ -121,7 +121,7 @@ export function useWorktreeWatcher(): void {
             .applyPushedStatus(
               workspaceId,
               pushedGitStatus,
-              workspace.projectId,
+              localProjectIdOf(workspace),
               targetStatusScope
             );
           if (

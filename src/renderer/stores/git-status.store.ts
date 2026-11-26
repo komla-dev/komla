@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 
-import { useProjectSyncStatusStore } from './project-sync-status.store';
+import { isSshWorkspace, type GitBranchQuickStatus, type Workspace } from '../types';
 
-import type { GitBranchQuickStatus } from '../types';
+import { useProjectSyncStatusStore } from './project-sync-status.store';
 
 interface CachedStatus {
   status: GitBranchQuickStatus;
@@ -34,10 +34,11 @@ interface GitStatusState {
   invalidateStatus: (workspaceId: string) => void;
   clearBehindTargetBranch: (workspaceId: string, targetBranch: string) => void;
   hydrateStatus: (workspaceId: string, status: GitBranchQuickStatus) => void;
+  /** `localProjectId` is a local workspace's project, whose sync status takes its counts. */
   applyPushedStatus: (
     workspaceId: string,
     status: GitBranchQuickStatus,
-    projectId?: string | null,
+    localProjectId?: string | null,
     targetStatusScope?: string
   ) => void;
   getStatus: (workspaceId: string) => CachedStatus | undefined;
@@ -88,10 +89,34 @@ function applySharedTargetStatus(
   }
 }
 
+/** The project whose sync status takes this workspace's counts: its own, if it is local. */
+export function localProjectIdOf(workspace: Workspace): string | null | undefined {
+  return isSshWorkspace(workspace) ? undefined : workspace.projectId;
+}
+
+/**
+ * Gives the project's sync status, which counts its target in the project's local clone, the
+ * counts a local workspace found. An SSH workspace counts its host's clone instead, which lags
+ * origin after a push made here, so its counts stay out.
+ */
+function feedProjectSyncStatus(
+  localProjectId: string | null | undefined,
+  status: GitBranchQuickStatus
+): void {
+  if (!localProjectId) return;
+  useProjectSyncStatusStore.getState().updateFromWorkspaceStatus(localProjectId, {
+    hasRemote: status.targetBranchHasRemote,
+    aheadRemote: status.targetBranchAheadRemote,
+    behindRemote: status.targetBranchBehindRemote,
+    mainBranch: status.mainBranch,
+    defaultBranch: status.defaultBranch,
+  });
+}
+
 export const useGitStatusStore = create<GitStatusState>((set, get) => ({
   statusMap: new Map(),
 
-  fetchStatus: async (workspaceId, _workingDir, projectId, targetStatusScope) => {
+  fetchStatus: async (workspaceId, workingDir, projectId, targetStatusScope) => {
     const requestId = Symbol(workspaceId);
     // Mark as loading
     set((state) => {
@@ -143,17 +168,7 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
 
       if (!accepted) return undefined;
 
-      // Feed project-level fields to the project sync status store.
-      // These values are shared across all workspaces of the same project.
-      if (projectId) {
-        useProjectSyncStatusStore.getState().updateFromWorkspaceStatus(projectId, {
-          hasRemote: status.targetBranchHasRemote,
-          aheadRemote: status.targetBranchAheadRemote,
-          behindRemote: status.targetBranchBehindRemote,
-          mainBranch: status.mainBranch,
-          defaultBranch: status.defaultBranch,
-        });
-      }
+      feedProjectSyncStatus(workingDir.startsWith('ssh://') ? undefined : projectId, status);
 
       return status;
     } catch (error) {
@@ -274,7 +289,7 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
     });
   },
 
-  applyPushedStatus: (workspaceId, status, projectId, targetStatusScope) => {
+  applyPushedStatus: (workspaceId, status, localProjectId, targetStatusScope) => {
     set((state) => {
       const newMap = new Map(state.statusMap);
       const existing = newMap.get(workspaceId);
@@ -292,15 +307,7 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
       return { statusMap: newMap };
     });
 
-    if (projectId) {
-      useProjectSyncStatusStore.getState().updateFromWorkspaceStatus(projectId, {
-        hasRemote: status.targetBranchHasRemote,
-        aheadRemote: status.targetBranchAheadRemote,
-        behindRemote: status.targetBranchBehindRemote,
-        mainBranch: status.mainBranch,
-        defaultBranch: status.defaultBranch,
-      });
-    }
+    feedProjectSyncStatus(localProjectId, status);
   },
 
   getStatus: (workspaceId) => {

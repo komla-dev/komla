@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { updateFromWorkspaceStatus } = vi.hoisted(() => ({ updateFromWorkspaceStatus: vi.fn() }));
 vi.mock('../../../src/renderer/stores/project-sync-status.store', () => ({
   useProjectSyncStatusStore: {
-    getState: () => ({ updateFromWorkspaceStatus: vi.fn() }),
+    getState: () => ({ updateFromWorkspaceStatus }),
   },
 }));
 
@@ -138,6 +139,30 @@ describe('git-status.store', () => {
     expect(sibling?.status.aheadTargetBranch).toBe(7);
     expect(sibling?.status.currentBranch).toBe('other-feature');
     expect(sibling?.lastFetched).toBe(123);
+  });
+
+  it("feeds a local workspace's target counts to the project's sync status", async () => {
+    updateFromWorkspaceStatus.mockClear();
+    await useGitStatusStore.getState().fetchStatus('ws-1', '/repo/worktree-1', 'project-1');
+
+    expect(updateFromWorkspaceStatus).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({ behindRemote: 0 })
+    );
+  });
+
+  it("keeps an SSH workspace's target counts out of the project's sync status", async () => {
+    // The SSH host's clone, not the project's local one: it lags origin after a local push.
+    // No scope: a scratch workspace has none, nor does one no status indicator registered yet.
+    mockApi({
+      getWorkspaceGitBranchStatus: vi
+        .fn()
+        .mockResolvedValue({ ...mockBranchStatus, targetBranchBehindRemote: 3 }),
+    });
+    updateFromWorkspaceStatus.mockClear();
+    await useGitStatusStore.getState().fetchStatus('ws-1', 'ssh://host/worktree-1', 'project-1');
+
+    expect(updateFromWorkspaceStatus).not.toHaveBeenCalled();
   });
 
   it('does not share target-branch remote fields across repositories', async () => {

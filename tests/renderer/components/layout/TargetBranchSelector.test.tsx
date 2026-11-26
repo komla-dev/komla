@@ -179,7 +179,7 @@ describe('TargetBranchSelector', () => {
   });
 
   it('offers only Pull, not a duplicate Sync, when the target is just behind its remote', async () => {
-    projectSync.status = { aheadRemote: 0, behindRemote: 2, hasRemote: true };
+    gitStatus.overrides = { targetBranchAheadRemote: 0, targetBranchBehindRemote: 2 };
     await openMenu();
 
     expect(screen.getByRole('menuitem', { name: /Pull/ })).toHaveTextContent('↓2');
@@ -187,7 +187,7 @@ describe('TargetBranchSelector', () => {
   });
 
   it('shows target commits origin lacks as a cloud count, not ↑N', async () => {
-    projectSync.status = { aheadRemote: 2, behindRemote: 0, hasRemote: true };
+    gitStatus.overrides = { targetBranchAheadRemote: 2, targetBranchBehindRemote: 0 };
     await openMenu();
 
     const trigger = screen.getByTitle('main').closest('button')!;
@@ -197,15 +197,25 @@ describe('TargetBranchSelector', () => {
   });
 
   it('keeps Sync when the target is up to date with its remote', async () => {
-    projectSync.status = { aheadRemote: 0, behindRemote: 0, hasRemote: true };
+    gitStatus.overrides = { targetBranchAheadRemote: 0, targetBranchBehindRemote: 0 };
     await openMenu();
 
     expect(screen.getByRole('menuitem', { name: /Sync/ })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /Pull/ })).toBeNull();
   });
 
+  it("counts this workspace's own target, not a project status another workspace wrote", async () => {
+    // An SSH workspace of the project, or one with a different target, wrote its own counts.
+    projectSync.status = { aheadRemote: 0, behindRemote: 3, hasRemote: true };
+    await openMenu();
+
+    const trigger = screen.getByTitle('main').closest('button')!;
+    expect(trigger).not.toHaveTextContent('↓');
+    expect(screen.queryByRole('menuitem', { name: /Pull/ })).toBeNull();
+  });
+
   it('keeps Sync next to Merge remote when the target has diverged', async () => {
-    projectSync.status = { aheadRemote: 1, behindRemote: 2, hasRemote: true };
+    gitStatus.overrides = { targetBranchAheadRemote: 1, targetBranchBehindRemote: 2 };
     await openMenu();
 
     expect(screen.getByRole('menuitem', { name: /Sync/ })).toBeInTheDocument();
