@@ -13,40 +13,45 @@ hands it a full shell, and with no desktop connected it can't choose the project
 Komla will instead serve MCP on the remote control server, at `/remote/mcp`, the same server that
 Tailscale Serve already publishes to the tailnet. An **outside agent** gets an **agent token** that
 the user approves on the remote control page while signed in with a trusted passkey. The token lets
-it run a fixed set of Komla Operations, limited to the projects and agents the user chose. As on the
+it run a fixed set of Komla Operations, limited to the projects the user chose. As on the
 CLI and in the SDK, the operations own every rule, and Agent Capability controls still apply. The
 route is only another adapter.
 
-- **Pairing.** The route follows the MCP authorization spec: OAuth 2.1 with PKCE, and the desktop as
-  its authorization server. A client that calls without a token gets `401` and the server's
-  metadata. It sends the user to a consent page in the remote web app. The user signs in there with
-  a passkey and user verification, as for any session, and sees the client's name. They choose
-  which projects, agents and launch modes it may use, then approve. The desktop issues a
-  short-lived access token and a rotating refresh token. A client that only takes a fixed header
-  gets the same consent page, which shows a token to paste instead, valid for a period the user
-  picks, at most 90 days. Every token is 256 random bits, and the desktop stores only its hash.
-- **What a token may do.** It may run `agent.launch` into a new workspace, only in its projects and
-  only with the agents and modes the user chose. It may also run `workspace.list`, limited to its
-  projects, and read a workspace's state. It can't send terminal input, read terminal output, attach
-  a terminal or change settings. A prompt can still make an agent do anything that agent's mode
-  allows, which is why the consent page names the modes and offers none that skip permissions
-  unless the user ticks them.
+- **Pairing.** In the remote web app's Settings, under Agent access, a signed-in device names the
+  agent, picks its projects, where it may work and how long the token works, and approves. Where
+  starts at SSH hosts only; letting the agent reach this computer too is a choice the user makes
+  for each token. A token works for 7, 30 or 90 days, 30 by default, so one forgotten in a bot's
+  config stops working by itself. For a bot the user runs for good, it can instead work until
+  revoked, and the form warns that anyone who copies it keeps that access. The desktop sends the
+  token once, over the encrypted session, for the user to paste into the agent. A session needs no fresh passkey for this: it can already type into every terminal, which is
+  more than a token allows. Every token is 256 random bits, and the desktop stores only its hash.
+  Later, the route can follow the MCP authorization spec, OAuth 2.1 with PKCE and the desktop as its
+  authorization server, with the same page as its consent screen, so clients that support it pair
+  without a pasted token.
+- **What a token may do.** It may run `agent.launch` into a new workspace, only in its projects,
+  and `project.list` and `workspace.list`, limited to them. It can't send terminal input, read
+  terminal output, attach a terminal or change settings. A prompt can still make an agent do
+  anything that agent's mode allows, so a token starts only the modes the user lets agents start,
+  the setting that already limits agents in Komla's terminals, and agents can't start a mode that
+  skips permission prompts unless the user allowed it. A token for SSH hosts only, and every token
+  while "Allow access to this computer" is off, neither sees nor starts workspaces on this
+  computer, as devices may not then. A user who keeps that access for their own phone can still
+  keep a bot off this computer.
 - **New tools that take a project.** An outside agent has no `cwd`, so the route offers its own
   tools: `list_projects`, `list_workspaces`, `launch_workspace` (with project, prompt, and optional
   agent, mode, name and branch) and `workspace_status`. The existing tools stay as they are for
-  agents in Komla's terminals. Listing projects needs a new read-only operation, because today only
-  a failed launch lists them.
+  agents in Komla's terminals. Listing projects is a new read-only operation, `project.list`,
+  because before it only a failed launch listed them.
 - **Transport.** Requests are plain HTTPS with a bearer token, not the encrypted Peer protocol that
   phones speak. MCP clients can't speak that protocol, and a token can't open a shell. Tailscale
   Serve ends TLS on the desktop's own machine, so the path stays encrypted all the way there. The
-  route refuses requests that carry a browser `Origin`. The consent pages are the only exception,
-  and they are served from Komla's own origin.
+  route refuses requests that carry a browser `Origin` or a `Sec-Fetch-Site` other than `none`.
 - **Tailnet only.** The Funnel rule is unchanged: Komla doesn't run remote control while Funnel is
   on for its port. An outside agent therefore has to run on a machine on the user's tailnet.
 - **Revocation and audit.** Settings › Remote lists agent tokens next to trusted passkeys, with
   their scope and when each was last used. Removing one ends it at once. Removing the passkey that
-  approved a token, or turning remote control off, revokes it too. A workspace an outside agent
-  launches records which token launched it.
+  approved a token, or turning remote control off, revokes it too. Later, a workspace an outside
+  agent launches can record which token launched it.
 - **The desktop first.** The route runs on the desktop, so it is unavailable while the desktop is
   asleep. The host's phone server (ADR 0005) can already create workspaces without a desktop. It
   could later serve the same route, with token hashes and scopes copied to `trust.json` under its

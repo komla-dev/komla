@@ -26,6 +26,7 @@ export const KOMLA_OPERATION_CAPABILITIES = {
   },
   'workspace.list': null,
   'tag.list': null,
+  'project.list': null,
   'workspace.title': 'workspace.title',
   'workspace.snooze': 'workspace.snooze',
   // Waking only undoes a snooze, so a job's hook can still end one.

@@ -82,7 +82,7 @@ describe('remote service worker', () => {
   it('leaves the socket, connection config and health check to the network', async () => {
     const worker = loadWorker(async () => okResponse('x'));
 
-    for (const path of ['ws?fp=abc', 'config', 'health']) {
+    for (const path of ['ws?fp=abc', 'config', 'health', 'mcp']) {
       expect(await worker.dispatchFetch(`${SCOPE}${path}`)).toBeUndefined();
     }
     expect(await worker.dispatchFetch('https://desk.tailnet.ts.net/other/app.js')).toBeUndefined();

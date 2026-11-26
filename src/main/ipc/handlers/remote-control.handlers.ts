@@ -3,6 +3,7 @@ import { promisify } from 'util';
 
 import { IPC } from '../../../shared/constants/ipc-channels';
 import { tailscaleCommand, type TailscaleCommand } from '../../lib/tailscale-command';
+import { agentTokenService } from '../../services/agent-token.service';
 import { configService } from '../../services/config.service';
 import { pairedDeviceRegistryService } from '../../services/paired-device-registry.service';
 import {
@@ -25,6 +26,7 @@ import {
 import { windowService } from '../../services/window.service';
 import { handleIpc } from '../validation/ipc-validators';
 
+import type { AgentTokenSummary } from '../../../shared/types/agent-token';
 import type { PairedDeviceRecord } from '../../../shared/types/paired-device';
 import type {
   RemoteControlDirectPairingOffer,
@@ -89,6 +91,8 @@ export function registerRemoteControlHandlers(): void {
       return cleanupError;
     });
     forgetPersistedDirectRemoteServer();
+    // Turning remote control off ends Outside Agents' access too, as it ends resume grants.
+    agentTokenService.revokeAll();
     // Hosts Komla can't reach now stop their phone servers when it next connects.
     await remoteControlHostAccessService.remoteControlTurnedOff();
     if (tailscaleCleanupError) {
@@ -222,6 +226,18 @@ export function registerRemoteControlHandlers(): void {
     remoteControlDirectService.disconnectCredential(credentialId);
     remoteControlSessionService.releaseDeviceLeases(credentialId);
     pairedDeviceRegistryService.remove(credentialId);
+  });
+
+  handleIpc(IPC.AGENT_TOKENS_LIST, async (): Promise<AgentTokenSummary[]> =>
+    agentTokenService.list()
+  );
+
+  handleIpc(IPC.AGENT_TOKENS_REVOKE, async (_evt, [{ id }]): Promise<void> => {
+    agentTokenService.revoke(id);
+  });
+
+  agentTokenService.onChange((tokens) => {
+    windowService.broadcastWhenReady(IPC.AGENT_TOKENS_CHANGED, tokens);
   });
 
   // Broadcast list changes to every window so the Settings panel updates

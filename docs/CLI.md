@@ -532,7 +532,7 @@ a request as it is. Results and errors are the ones `--json` prints: a call reso
 and throws a `KomlaError` with Komla's `code`, `message`, HTTP `status` and `details`. The SDK adds
 `CAPABILITY_NOT_DECLARED`, `INVALID_CAPABILITY`, `KOMLA_NOT_RUNNING`, `KOMLA_UNREACHABLE` and
 `UNEXPECTED_RESPONSE`. A call's `{ workspace: id }` acts on that workspace, as `--workspace` does.
-A call that changes nothing (`context.get`, `agent.presets`, `workspace.list`, `tag.list`) waits
+A call that changes nothing (`context.get`, `agent.presets`, `workspace.list`, `project.list`, `tag.list`) waits
 10 seconds for Komla, as the CLI does; the SDK doesn't time out others, which Komla may have
 carried out already. A change whose answer breaks off throws `UNEXPECTED_RESPONSE`, as it may have
 run. The types don't show that `workspace.snooze` needs `until` or `untilNotified`, and
@@ -710,6 +710,28 @@ Set or update the title for an existing Komla workspace by matching the agent's 
 **Example usage in Claude Code:**
 
 > Set workspace title to "Fix MCP title updates" for cwd `/Users/me/.komla/worktrees/komla/agent-mcp-title`
+
+### Outside Agents
+
+An agent that runs outside Komla's terminals, such as a chat bot on another machine on your
+tailnet, calls MCP on remote control's server instead, at `https://<computer>.<tailnet>.ts.net/remote/mcp`
+(Settings › Remote copies the address), with an Agent Token as
+`Authorization: Bearer komla_agent_…`. Approve one in the remote control page's Settings, under
+Agent access: name the agent, pick its projects, where it may work (SSH hosts only, unless you
+let it reach this computer too) and how long it works, up to never expiring. See
+[ADR 0013](adr/0013-outside-agents-reach-komla-through-remote-control.md).
+
+| Tool               | What it does                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `list_projects`    | The token's projects, by id and name                                                                                         |
+| `list_workspaces`  | Their workspaces: id, name, project, branch, whether the agent works, and the attention it shows                             |
+| `launch_workspace` | Starts an agent in a new workspace: `project` and `prompt`, and optional `name`, `description`, `branch`, `agent` and `mode` |
+| `workspace_status` | One workspace's state, by the id `launch_workspace` gave                                                                     |
+
+A launch starts only the modes you let agents start. A token for SSH hosts only, and every token
+while Allow access to this computer is off in Settings › Remote, sees and starts only workspaces on
+SSH hosts. `project.list`, the operation `list_projects`
+runs, is also open to the SDK.
 
 ## Architecture
 

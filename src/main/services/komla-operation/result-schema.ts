@@ -237,6 +237,7 @@ export const komlaOperationResultSchemas = {
       ),
     })
     .strict(),
+  'project.list': z.object({ projects: z.array(named) }).strict(),
   'tag.list': z
     .object({
       tags: z.array(

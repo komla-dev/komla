@@ -3,7 +3,7 @@ import { createServer, request } from 'http';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import type { Server } from 'http';
+import type { IncomingMessage, Server, ServerResponse } from 'http';
 import type { AddressInfo, Socket } from 'net';
 
 import {
@@ -83,6 +83,7 @@ function makeService(
     heartbeatPingMs?: number;
     heartbeatTimeoutMs?: number;
     createServer?: typeof createServer;
+    handleAgentMcpRequest?: (req: IncomingMessage, res: ServerResponse) => void;
   } = {}
 ): {
   service: RemoteControlDirectService;
@@ -125,6 +126,7 @@ function makeService(
     webAssetDir,
     emitStateChange,
     terminalPresentationTracking,
+    handleAgentMcpRequest: options.handleAgentMcpRequest,
   });
   return { service, registry, emitStateChange, terminalPresentationTracking };
 }
@@ -726,6 +728,24 @@ describe('RemoteControlDirectService', () => {
 
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toEqual({ ok: true });
+  });
+
+  it("hands /remote/mcp to Outside Agents' MCP route rather than serving a file", async () => {
+    const handleAgentMcpRequest = vi.fn((_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end('{"error":"token"}');
+    });
+    const agentService = makeService(webAssetDir, { handleAgentMcpRequest }).service;
+    const info = await agentService.start();
+
+    try {
+      const response = await httpGet(`${info.httpOrigin}/remote/mcp`);
+
+      expect(response.statusCode).toBe(401);
+      expect(handleAgentMcpRequest).toHaveBeenCalledTimes(1);
+    } finally {
+      await agentService.stop();
+    }
   });
 
   it('rejects websocket upgrades with a mismatched fingerprint', async () => {

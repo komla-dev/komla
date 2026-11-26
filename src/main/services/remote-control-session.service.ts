@@ -42,6 +42,7 @@ import { createLogger } from '../lib/logger';
 
 import { actionService } from './action.service';
 import { agentPresetService } from './agent-preset.service';
+import { agentTokenService, type AgentTokenService } from './agent-token.service';
 import { configService } from './config.service';
 import { gitService } from './git.service';
 import { projectService } from './project.service';
@@ -270,6 +271,8 @@ type PushServiceLike = Pick<
 
 type HostAccessLike = Pick<RemoteControlHostAccessService, 'phoneHosts' | 'onChange'>;
 
+type AgentTokensLike = Pick<AgentTokenService, 'list' | 'create' | 'revoke'>;
+
 /** The trusted device an authenticated session belongs to. */
 export interface RemoteSessionDevice {
   credentialId: string;
@@ -293,6 +296,7 @@ export interface RemoteControlSessionServiceDeps {
   sizeLeaseLingerMs?: number;
   push?: PushServiceLike;
   hostAccess?: HostAccessLike;
+  agentTokens?: AgentTokensLike;
 }
 
 interface TerminalOutputChunk {
@@ -817,6 +821,11 @@ class RemoteControlAppSession implements RemoteControlSession {
       case 'app:hosts:list':
         await this.sendHosts(frame.requestId);
         return;
+      case 'app:agent-tokens:list':
+      case 'app:agent-token:create':
+      case 'app:agent-token:revoke':
+        await this.handleAgentTokenFrame(frame);
+        return;
       case 'app:voice:status':
         {
           const available = this.deps.voice.getStatus() === 'ready';
@@ -1001,6 +1010,59 @@ class RemoteControlAppSession implements RemoteControlSession {
       type: 'app:push:config',
       requestId: frame.requestId,
       ...this.deps.push.config(credentialId),
+    });
+  }
+
+  /**
+   * Agent Tokens for Outside Agents (ADR 0013). A signed-in device can already type into every
+   * terminal, so approving a token, which can only start and list workspaces, needs no more.
+   */
+  private async handleAgentTokenFrame(
+    frame: Extract<
+      RemoteAppFrame,
+      { type: 'app:agent-tokens:list' | 'app:agent-token:create' | 'app:agent-token:revoke' }
+    >
+  ): Promise<void> {
+    if (!this.device?.capabilities?.includes(REMOTE_CAPABILITIES.AGENT_TOKENS)) {
+      await this.sendError(
+        frame.requestId,
+        'agent-tokens-unavailable',
+        'this session cannot manage agent tokens'
+      );
+      return;
+    }
+    if (frame.type === 'app:agent-token:create') {
+      const known = new Set(this.deps.projects.list().map((project) => project.id));
+      const unknown = frame.projectIds.find((id) => !known.has(id));
+      try {
+        if (unknown) throw new Error('One of those projects no longer exists.');
+        const { token, summary } = this.deps.agentTokens.create({
+          label: frame.label,
+          projectIds: frame.projectIds,
+          lifetimeDays: frame.lifetimeDays,
+          sshOnly: frame.sshOnly,
+          credentialId: this.device.credentialId,
+        });
+        await this.peer.sendEncryptedJson({
+          type: 'app:agent-token:created',
+          requestId: frame.requestId,
+          token,
+          summary,
+        });
+      } catch (err) {
+        await this.sendError(
+          frame.requestId,
+          'agent-token-rejected',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+      return;
+    }
+    if (frame.type === 'app:agent-token:revoke') this.deps.agentTokens.revoke(frame.id);
+    await this.peer.sendEncryptedJson({
+      type: 'app:agent-tokens',
+      requestId: frame.requestId,
+      tokens: this.deps.agentTokens.list(),
     });
   }
 
@@ -1789,6 +1851,7 @@ export class RemoteControlSessionService {
       outputDrainPollMs: deps.outputDrainPollMs ?? DEFAULT_OUTPUT_DRAIN_POLL_MS,
       push: deps.push ?? remoteControlPushService,
       hostAccess: deps.hostAccess ?? remoteControlHostAccessService,
+      agentTokens: deps.agentTokens ?? agentTokenService,
       sizeLeaseLingerMs: deps.sizeLeaseLingerMs ?? DEFAULT_SIZE_LEASE_LINGER_MS,
     };
     this.leases = new LingeringSizeLeases(this.deps.sizeLeaseLingerMs);

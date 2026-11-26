@@ -73,6 +73,8 @@ function installApi(directState: RemoteControlDirectState) {
   const api = {
     remoteControlDirectGetState: vi.fn().mockResolvedValue(directState),
     pairedDevicesList: vi.fn().mockResolvedValue([]),
+    agentTokensList: vi.fn().mockResolvedValue([]),
+    onAgentTokensChanged: vi.fn(() => vi.fn()),
     onRemoteControlDirectStateChanged: vi.fn(
       (callback: (state: RemoteControlDirectState) => void) => {
         directStateChanged = callback;

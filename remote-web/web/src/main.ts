@@ -48,6 +48,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 
+import { AgentAccessPanel, type AgentAccessElements } from './agent-access';
 import { floatToPcm16, startAudioCapture, type AudioCaptureHandle } from './audio-capture';
 import { agentIconSvg } from './agent-icons';
 import { attentionLabel, attentionMessageIsLabel } from './attention';
@@ -204,6 +205,7 @@ const PAGE_CAPABILITIES = [
   REMOTE_CAPABILITIES.BINARY_FRAMES,
   REMOTE_CAPABILITIES.PROJECT_ICONS,
   REMOTE_CAPABILITIES.WORKSPACE_TAGS,
+  REMOTE_CAPABILITIES.AGENT_TOKENS,
 ];
 const RELOADED_FOR_BUILD_KEY = 'komla.remote.reloadedForBuild';
 // A flick leaves with the speed of its last moments, if fast enough to coast.
@@ -273,6 +275,7 @@ interface RemoteUI {
   pushWhen: HTMLFieldSetElement;
   pushTest: HTMLButtonElement;
   pushHint: HTMLElement;
+  agentAccess: AgentAccessElements;
   workspaceSearch: HTMLInputElement;
   workspaceFilters: HTMLElement;
   workspaceList: HTMLElement;
@@ -412,6 +415,26 @@ function remoteUi(): RemoteUI {
     pushWhen: byId('push-when') as HTMLFieldSetElement,
     pushTest: byId('push-test') as HTMLButtonElement,
     pushHint: byId('push-hint'),
+    agentAccess: {
+      section: byId('agent-access'),
+      list: byId('agent-token-list'),
+      add: byId('agent-token-add') as HTMLButtonElement,
+      form: byId('agent-token-form') as HTMLFormElement,
+      label: byId('agent-token-label') as HTMLInputElement,
+      projects: byId('agent-token-projects'),
+      lifetime: byId('agent-token-lifetime') as HTMLSelectElement,
+      neverWarning: byId('agent-token-never-warning'),
+      where: byId('agent-token-where') as HTMLSelectElement,
+      approve: byId('agent-token-approve') as HTMLButtonElement,
+      cancel: byId('agent-token-cancel') as HTMLButtonElement,
+      created: byId('agent-token-created'),
+      token: byId('agent-token-value'),
+      copyToken: byId('agent-token-copy') as HTMLButtonElement,
+      mcpUrl: byId('agent-mcp-url'),
+      copyMcpUrl: byId('agent-mcp-url-copy') as HTMLButtonElement,
+      done: byId('agent-token-done') as HTMLButtonElement,
+      hint: byId('agent-token-hint'),
+    },
     workspaceSearch: byId('workspace-search') as HTMLInputElement,
     workspaceFilters: byId('workspace-filters'),
     workspaceList: byId('workspace-list'),
@@ -806,6 +829,7 @@ class RemoteAppClient {
   private readonly terminalMutations = new TerminalMutationQueue();
   private workspaces: RemoteWorkspaceSummary[] = [];
   private projects: RemoteProjectSummary[] = [];
+  private readonly agentAccess: AgentAccessPanel;
   /** Workspaces only other endpoints list, by id, as last shown. */
   private elsewhere = new Map<string, EndpointWorkspaces>();
   private readonly endpointLists = new EndpointLists({
@@ -941,6 +965,16 @@ class RemoteAppClient {
   ) {
     this.peer = connection.peer;
     this.ws = connection.ws;
+    this.agentAccess = new AgentAccessPanel(this.els.agentAccess, {
+      send: (frame) => {
+        const requestId = this.requestId();
+        return this.sendRemoteFrame({ ...frame, requestId } as RemoteAppFrame) ? requestId : null;
+      },
+      projects: () => this.projects,
+      origin: () => location.origin,
+      copy: (text) => navigator.clipboard.writeText(text),
+      confirm: (message) => window.confirm(message),
+    });
     this.term.loadAddon(this.fitAddon);
     this.term.loadAddon(this.serializeAddon);
     this.mouseEncoding = trackMouseEncoding(this.term);
@@ -1245,6 +1279,7 @@ class RemoteAppClient {
     this.queryVoiceAvailability();
     this.sendVisibility();
     this.sendPushFrame({ type: 'app:push:config:get' });
+    this.agentAccess.connected(!this.endpoint.host);
   }
 
   /**
@@ -1424,6 +1459,7 @@ class RemoteAppClient {
 
   private handleFrame(frame: RemoteAppFrame): void {
     if (this.disconnected) return;
+    if (this.agentAccess.handleFrame(frame)) return;
     switch (frame.type) {
       case 'app:hosts':
         if (!this.endpoint.host) {
@@ -1480,6 +1516,7 @@ class RemoteAppClient {
         this.renderLaunchOptions();
         this.renderWorkspaceActions();
         this.renderNewTabAgents();
+        this.agentAccess.render();
         return;
       case 'app:workspace:created':
         this.setCreateWorkspacePending(false);
@@ -2707,6 +2744,7 @@ class RemoteAppClient {
 
   private openSettings(): void {
     this.renderPushSettings();
+    this.agentAccess.refresh();
     if (!this.els.settingsSheet.open) this.els.settingsSheet.showModal();
   }
 

@@ -172,6 +172,9 @@ export {
   RemoteTerminalSnapshotSchema,
   RemotePushSubscriptionSchema,
   RemoteHostEndpointSchema,
+  RemoteAgentTokenSummarySchema,
+  MAX_REMOTE_AGENT_TOKEN_LABEL_CHARS,
+  REMOTE_AGENT_TOKEN_LIFETIME_DAYS,
   parseRemoteAppFrame,
   type RemoteAppFrame,
   type RemoteWorkspaceSummary,
@@ -211,5 +214,8 @@ export {
   type RemotePushTested,
   type RemoteHostEndpoint,
   type RemoteHosts,
+  type RemoteAgentTokenSummary,
+  type RemoteAgentTokens,
+  type RemoteAgentTokenCreated,
   type RemoteError,
 } from './app/frames';

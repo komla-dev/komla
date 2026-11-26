@@ -647,6 +647,13 @@ export const IPC = {
 
   // Paired devices events (main → renderer)
   PAIRED_DEVICES_CHANGED: 'paired-devices:changed',
+
+  // Agent Tokens for Outside Agents (ADR 0013)
+  AGENT_TOKENS_LIST: 'agent-tokens:list',
+  AGENT_TOKENS_REVOKE: 'agent-tokens:revoke',
+
+  // Agent Tokens events (main → renderer)
+  AGENT_TOKENS_CHANGED: 'agent-tokens:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

@@ -33,6 +33,7 @@ const READ_OPERATIONS: ReadonlySet<KomlaOperationType> = new Set([
   'agent.presets',
   'workspace.list',
   'tag.list',
+  'project.list',
 ] satisfies KomlaOperationType[]);
 
 /** Sends operations to `/api/v1/commands`, as the CLI does. */

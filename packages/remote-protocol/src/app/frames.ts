@@ -615,6 +615,70 @@ export const RemoteHostsSchema = z
   })
   .strict();
 
+// Agent Tokens, which Outside Agents call `/remote/mcp` with (ADR 0013). Only sent over a session
+// that agreed on REMOTE_CAPABILITIES.AGENT_TOKENS.
+export const MAX_REMOTE_AGENT_TOKEN_LABEL_CHARS = 64;
+/** Null is a token that works until it is revoked. */
+export const REMOTE_AGENT_TOKEN_LIFETIME_DAYS = [7, 30, 90, null] as const;
+
+export const RemoteAgentTokenSummarySchema = z
+  .object({
+    id: IdSchema,
+    label: z.string().min(1).max(MAX_REMOTE_AGENT_TOKEN_LABEL_CHARS),
+    projectIds: z.array(IdSchema).max(256),
+    /** Only SSH hosts' workspaces, never the desktop's own. */
+    sshOnly: z.boolean(),
+    createdAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().nonnegative().nullable(),
+    lastUsedAt: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+export const RemoteListAgentTokensSchema = z
+  .object({
+    type: z.literal('app:agent-tokens:list'),
+    requestId: RequestIdSchema,
+  })
+  .strict();
+
+export const RemoteAgentTokensSchema = z
+  .object({
+    type: z.literal('app:agent-tokens'),
+    requestId: RequestIdSchema,
+    tokens: z.array(RemoteAgentTokenSummarySchema).max(64),
+  })
+  .strict();
+
+export const RemoteCreateAgentTokenSchema = z
+  .object({
+    type: z.literal('app:agent-token:create'),
+    requestId: RequestIdSchema,
+    label: z.string().min(1).max(MAX_REMOTE_AGENT_TOKEN_LABEL_CHARS),
+    projectIds: z.array(IdSchema).min(1).max(256),
+    lifetimeDays: z.union([z.literal(7), z.literal(30), z.literal(90), z.null()]),
+    /** Left out, the token is SSH-only: reaching the desktop itself is the choice to make. */
+    sshOnly: z.boolean().optional(),
+  })
+  .strict();
+
+/** The token itself, which the desktop never sends again. */
+export const RemoteAgentTokenCreatedSchema = z
+  .object({
+    type: z.literal('app:agent-token:created'),
+    requestId: RequestIdSchema,
+    token: z.string().regex(/^komla_agent_[A-Za-z0-9_-]{43}$/),
+    summary: RemoteAgentTokenSummarySchema,
+  })
+  .strict();
+
+export const RemoteRevokeAgentTokenSchema = z
+  .object({
+    type: z.literal('app:agent-token:revoke'),
+    requestId: RequestIdSchema,
+    id: IdSchema,
+  })
+  .strict();
+
 /** The phone shows or hides the page, so the desktop knows whether it is being looked at. */
 export const RemoteClientVisibilitySchema = z
   .object({
@@ -671,6 +735,11 @@ export const RemoteAppFrameSchema = z.discriminatedUnion('type', [
   RemotePushTestedSchema,
   RemoteListHostsSchema,
   RemoteHostsSchema,
+  RemoteListAgentTokensSchema,
+  RemoteAgentTokensSchema,
+  RemoteCreateAgentTokenSchema,
+  RemoteAgentTokenCreatedSchema,
+  RemoteRevokeAgentTokenSchema,
   RemoteClientVisibilitySchema,
   RemoteErrorSchema,
 ]);
@@ -720,6 +789,9 @@ export type RemotePushConfig = z.infer<typeof RemotePushConfigSchema>;
 export type RemotePushTested = z.infer<typeof RemotePushTestedSchema>;
 export type RemoteHostEndpoint = z.infer<typeof RemoteHostEndpointSchema>;
 export type RemoteHosts = z.infer<typeof RemoteHostsSchema>;
+export type RemoteAgentTokenSummary = z.infer<typeof RemoteAgentTokenSummarySchema>;
+export type RemoteAgentTokens = z.infer<typeof RemoteAgentTokensSchema>;
+export type RemoteAgentTokenCreated = z.infer<typeof RemoteAgentTokenCreatedSchema>;
 export type RemoteError = z.infer<typeof RemoteErrorSchema>;
 export type RemoteAppFrame = z.infer<typeof RemoteAppFrameSchema>;
 

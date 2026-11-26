@@ -2130,6 +2130,96 @@ svg.agent-icon.generic {
   line-height: 1.45;
 }
 
+.agent-token-list {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.agent-token-row {
+  min-height: 52px;
+  padding: 6px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-token-row + .agent-token-row {
+  border-top: 1px solid var(--line-soft);
+}
+
+.agent-token-revoke {
+  flex: none;
+  color: var(--error);
+  background: transparent;
+  font-size: 14px;
+}
+
+.agent-token-form,
+.agent-token-created {
+  padding: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-token-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-token-field input,
+.agent-token-field select {
+  min-height: 40px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.agent-token-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-token-actions .settings-button {
+  flex: 1;
+}
+
+.settings-button.primary {
+  color: #fff;
+  background: var(--brand);
+}
+
+.settings-button:disabled {
+  opacity: 0.45;
+}
+
+.agent-token-warning {
+  color: var(--warn);
+}
+
+.agent-token-secret {
+  padding: 10px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--panel);
+  border-radius: var(--radius-control);
+  font-family: var(--mono);
+  font-size: 13px;
+  user-select: all;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

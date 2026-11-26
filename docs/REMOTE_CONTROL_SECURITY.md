@@ -132,6 +132,32 @@ A phone can also open an SSH host directly, through the Remote Companion on that
 - A signed-in phone can list the host's workspaces and attach a tmux client to an existing `komla-<terminal>` session. It can also create workspaces, start and stop them, and open and close tabs, but it only names what to start: projects, agents and launch modes come from `launch.json`, which the desktop writes next to `trust.json` over the same connection, and a workspace starts again with the agent commands Komla saved in its manifest. Its prompt reaches the agent command shell-quoted, and every path stays inside Komla's data directory on the host. A shell tab adds nothing a signed-in phone couldn't already type into an agent's terminal.
 - Removing a phone, or turning remote control off, reaches a host the next time the desktop connects to it; the lease bounds how long an unreachable host keeps honoring a removed phone. A host ends a phone's session as soon as it reads a trust file without that phone.
 
+## Outside Agents
+
+An Outside Agent, such as a chat bot on another machine on the tailnet, calls MCP at `/remote/mcp`
+on the same server with an Agent Token (ADR 0013). It never speaks the Peer protocol and never
+reaches a terminal.
+
+- A signed-in device approves each token in the remote web app's Settings, under Agent access:
+  its name, its projects, where it may work and how long it works: 7, 30 or 90 days, or until
+  revoked, which the form warns about. Where starts
+  at SSH hosts only, and a create frame that leaves it out gets that too. The desktop sends it once, over
+  the encrypted session, and keeps only its SHA-256 in `remote-agent-tokens.json` (mode 600). The
+  session that approves it needs no fresh passkey, since it can already type into every terminal.
+- A request carries the token as `Authorization: Bearer`. Without a live one it gets `401` and
+  runs nothing. A request with an `Origin` header or a `Sec-Fetch-Site` other than `none`, as
+  browsers send for pages, gets `403`, so a page on the tailnet can't use a token it doesn't hold
+  nor probe the route.
+- A token lists its projects and their workspaces, and starts workspaces in them. The Komla
+  Operations it runs take its projects as the caller's only ones, and Agent Capability controls
+  and the launch modes agents may start apply as to any agent. A token for SSH hosts only, and every
+  token while "Allow access to this computer" is off, neither sees nor starts workspaces on this
+  computer: folder projects drop out, a launch that would run here is refused, and attention from
+  a Local copy terminal is hidden.
+- A token ends when it expires, if it has an expiry, when the user revokes it in Settings › Remote or from a device,
+  when the passkey that approved it is removed, and when remote control is turned off.
+- SSH hosts' phone servers don't serve the route.
+
 ## Transcript and key binding
 
 Handshake signatures and the session-key derivation use a domain-separated, length-prefixed transcript. Both peers hash the same transcript to obtain the channel binding. Device proofs include that binding, and so does what a passkey signs: the page asks for a signature over a hash of the endpoint's challenge and the binding, never over a challenge as sent. That prevents a valid passkey or device signature from being replayed into another encrypted session, including an SSH host passing on to the desktop a signature it asked a phone for.
@@ -176,4 +202,8 @@ behind a capability first.
   pushes. A Terminal Command the project would run in the Local copy is refused. Setup steps the
   project sends to the Local copy still run when a device creates or starts an SSH workspace; their
   terminals stay hidden from it. Pairing and the host list still work.
+- An Agent Token runs only `project.list`, `workspace.list` and workspace launches, in its own
+  projects. It never attaches, reads or types into a terminal. The desktop stores only its hash,
+  and a request with a browser `Origin` or a cross-site `Sec-Fetch-Site` is refused before the
+  token is looked at.
 - An SSH host's phone server binds only `127.0.0.1`, does not run while Tailscale Funnel is on for its port (the desktop checks before starting it), closes a connection that doesn't start signing in within a minute of opening, never enrolls a device, and trusts only the phones in the desktop's current trust file, and none once its lease has expired.

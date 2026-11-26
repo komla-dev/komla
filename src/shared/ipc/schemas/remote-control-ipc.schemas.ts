@@ -16,6 +16,10 @@ export const pairedDevicesRenameArgsSchema = z.tuple([
   z.strictObject({ credentialId: credentialIdSchema, label: z.string().min(1).max(120) }),
 ]);
 
+export const agentTokensRevokeArgsSchema = z.tuple([
+  z.strictObject({ id: z.string().min(1).max(128) }),
+]);
+
 export const pairedDevicesRemoveArgsSchema = z.tuple([
   z.strictObject({ credentialId: credentialIdSchema }),
 ]);

@@ -299,6 +299,6 @@ and reaches Komla over remote control's MCP route rather than through `komla` in
 _Avoid_: Bot, external agent, remote agent
 
 **Agent Token**:
-The credential an Outside Agent holds, approved by the user with a trusted passkey and limited to
-chosen projects, agents and launch modes. It can start and list workspaces, never open a terminal.
+The credential an Outside Agent holds, approved on a device signed in with a trusted passkey and
+limited to the projects chosen there. It can start and list workspaces, never open a terminal.
 _Avoid_: API key, bot token, access grant

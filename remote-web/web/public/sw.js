@@ -2,12 +2,13 @@
 //
 // It makes the phone client installable and lets it open while the desktop is unreachable, so the
 // page can say so and retry instead of showing a browser error. It caches only the public app
-// shell. It never touches the WebSocket, /remote/config or /remote/health, and holds no keys:
-// trusted-device keys stay in IndexedDB and every session still authenticates with the desktop.
+// shell. It never touches the WebSocket, /remote/config, /remote/health or Outside Agents'
+// /remote/mcp, and holds no keys: trusted-device keys stay in IndexedDB and every session still
+// authenticates with the desktop.
 
 const SHELL_CACHE = 'komla-remote-shell-v1';
 const SHELL_URLS = ['./', './manifest.webmanifest', './icons/icon-192.png'];
-const UNCACHED_PATHS = new Set(['config', 'health', 'ws']);
+const UNCACHED_PATHS = new Set(['config', 'health', 'mcp', 'ws']);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

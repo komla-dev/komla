@@ -33,6 +33,7 @@ export const KOMLA_OPERATION_TYPES = [
   'workspace.wake',
   'workspace.list',
   'tag.list',
+  'project.list',
   'workspace.tag',
   'workspace.progress',
   'workspace.mark',
@@ -227,6 +228,11 @@ export interface WorkspaceListRequest {
 /** The user's tags, in their list's order. */
 export interface TagListRequest {
   type: 'tag.list';
+}
+
+/** The projects a workspace launch can name with `project`. */
+export interface ProjectListRequest {
+  type: 'project.list';
 }
 
 /** Gives the workspace its one tag, or takes it off without `tag`. A tag the user's list lacks joins it with `tone` and `icon`. */
@@ -524,6 +530,7 @@ export type KomlaOperationRequest =
   | WorkspaceWakeRequest
   | WorkspaceListRequest
   | TagListRequest
+  | ProjectListRequest
   | WorkspaceTagRequest
   | WorkspaceProgressRequest
   | WorkspaceMarkRequest
@@ -793,6 +800,14 @@ export interface TagListResult {
   }>;
 }
 
+/** What `project.list` resolves to. */
+export interface ProjectListResult {
+  projects: Array<{
+    id: string;
+    name: string;
+  }>;
+}
+
 /** What `workspace.tag` resolves to. */
 export interface WorkspaceTagResult {
   tag: {
@@ -969,6 +984,7 @@ export interface KomlaOperationResults {
   'workspace.wake': WorkspaceWakeResult;
   'workspace.list': WorkspaceListResult;
   'tag.list': TagListResult;
+  'project.list': ProjectListResult;
   'workspace.tag': WorkspaceTagResult;
   'workspace.progress': WorkspaceProgressResult;
   'workspace.mark': WorkspaceMarkResult;
@@ -1001,6 +1017,7 @@ export const KOMLA_OPERATION_CAPABILITIES = {
   'workspace.wake': null,
   'workspace.list': null,
   'tag.list': null,
+  'project.list': null,
   'workspace.tag': 'workspace.tag',
   'workspace.progress': 'workspace.tag',
   'workspace.mark': 'workspace.tag',

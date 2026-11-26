@@ -39,6 +39,7 @@ import { reportChildProcessGone } from './lib/process-gone-reporter';
 import { createQuitSequence, type QuitPhase } from './lib/quit-sequence';
 import { actionService, registerActionUsageTracker } from './services/action.service';
 import { agentPresetService } from './services/agent-preset.service';
+import { agentTokenService } from './services/agent-token.service';
 import { agentsMenuBarService } from './services/agents-menu-bar.service';
 import {
   automationService,
@@ -760,6 +761,8 @@ void app.whenReady().then(async () => {
   remoteControlDirectService.onStateChange(flushGitRefreshes);
   // Pushes nothing until remote control is on in Settings and a phone has turned notifications on.
   remoteControlPushService.start();
+  // An Agent Token ends with the passkey that approved it.
+  agentTokenService.start();
   // Phone access to SSH hosts follows phone list changes over connections Komla already has.
   remoteControlHostAccessService.start();
   onAttentionRaised((event) => {

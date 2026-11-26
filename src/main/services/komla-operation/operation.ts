@@ -299,6 +299,16 @@ export interface KomlaOperationContext {
    * `send` doesn't ask again. Only code in this process sets it, never a request.
    */
   userConfirmed?: boolean;
+  /**
+   * The only projects the caller may list, see the workspaces of and launch in, as an Agent
+   * Token's scope names them. Only code in this process sets it, never a request.
+   */
+  allowedProjectIds?: readonly string[];
+  /**
+   * The caller may neither see nor start work on this computer, as remote control's devices may
+   * not while "Allow access to this computer" is off. Only code in this process sets it.
+   */
+  sshOnly?: boolean;
 }
 
 /**
@@ -348,6 +358,8 @@ export interface KomlaOperationWorkspace {
     status?: TerminalStatus;
     agentActive?: boolean;
     attention?: WorkspaceAttention;
+    /** Where an SSH workspace's terminal runs; `local-copy` is on this computer. */
+    executionLocation?: string;
   }>;
   virtualDesktops?: WorkspaceVirtualDesktop[];
   linkedWorkspaceIds?: string[];
@@ -556,6 +568,8 @@ export type KomlaOperation =
       draft?: true;
     }
   | { type: 'workspace.list'; includeTrashed?: boolean }
+  /** The projects a workspace launch can name. */
+  | { type: 'project.list' }
   /** The user's tags, which `workspace.tag` gives a workspace with the look the user gave it. */
   | { type: 'tag.list' }
   | { type: 'workspace.title'; title: string; description?: string }
@@ -774,6 +788,8 @@ export class KomlaOperationService {
         return this.listWorkspaces(context, operation.includeTrashed === true);
       case 'tag.list':
         return this.listTags();
+      case 'project.list':
+        return this.listProjects(context);
       case 'workspace.title':
         return this.setWorkspaceTitle(context, operation);
       case 'workspace.snooze':
@@ -1858,6 +1874,17 @@ export class KomlaOperationService {
     operation: AgentLaunchOperation
   ): Promise<AgentLaunchResult> {
     const target = this.resolveWorkspaceLaunchTarget(context, workspace, operation.project);
+    if (
+      context.allowedProjectIds &&
+      (!target.project || !context.allowedProjectIds.includes(target.project.id))
+    ) {
+      throw new KomlaOperationError(
+        'PROJECT_NOT_ALLOWED',
+        'This caller may not start workspaces in that project.',
+        403,
+        { availableProjects: this.visibleProjects(context) }
+      );
+    }
     const placement = this.workspaceLaunchParams(
       target.project,
       target.workspace,
@@ -1865,10 +1892,21 @@ export class KomlaOperationService {
       operation,
       context.sshHostId
     );
+    const plannedEnvironment = plannedWorkspaceEnvironment(
+      placement,
+      this.dependencies.resolveEnvironment()
+    );
+    if (context.sshOnly && plannedEnvironment.kind !== 'ssh') {
+      throw new KomlaOperationError(
+        'SSH_HOSTS_ONLY',
+        `Agents start new workspaces on this computer, and this caller may start workspaces only on SSH hosts. Pick an SSH host under Where agents start in Settings → Integrations & MCP.`,
+        403
+      );
+    }
     const selection = this.resolveAgentSelection(
       target.workspace,
       operation,
-      plannedWorkspaceEnvironment(placement, this.dependencies.resolveEnvironment()),
+      plannedEnvironment,
       operation.prompt
     );
     const params: CreateWorkspaceParams = {
@@ -1928,7 +1966,7 @@ export class KomlaOperationService {
         : undefined;
     const caller = workspace ?? resolution?.sourceWorkspace;
     const project = operation.project
-      ? this.resolveProjectSelector(operation.project)
+      ? this.resolveProjectSelector(operation.project, context)
       : caller?.projectId
         ? this.dependencies.getProject(caller.projectId)
         : resolution?.project;
@@ -2026,10 +2064,10 @@ export class KomlaOperationService {
     workspace ??= contextResolution?.sourceWorkspace;
     // The cwd may match several synced copies, in which case only the project resolves.
     if (!projectSelector && !workspace && !contextResolution?.project) {
-      throw this.projectRequiredError(context.sshHostId, contextResolution?.error);
+      throw this.projectRequiredError(context, contextResolution?.error);
     }
     const project = projectSelector
-      ? this.resolveProjectSelector(projectSelector)
+      ? this.resolveProjectSelector(projectSelector, context)
       : workspace?.projectId
         ? this.dependencies.getProject(workspace.projectId)
         : contextResolution?.project;
@@ -2052,11 +2090,12 @@ export class KomlaOperationService {
    * A launch from outside every workspace, or from where workspaces of several projects meet
    * (`ambiguity` says how), names its project; this lists the ones it may.
    */
-  private projectRequiredError(sshHostId?: string, ambiguity?: string): KomlaOperationError {
-    // A request through an SSH host's tunnel places work on that host, where folder projects can't run.
-    const projects = this.dependencies
-      .listProjects()
-      .filter((project) => !sshHostId || project.kind !== 'directory');
+  private projectRequiredError(
+    context: KomlaOperationContext,
+    ambiguity?: string
+  ): KomlaOperationError {
+    const { sshHostId } = context;
+    const projects = this.visibleProjects(context);
     if (ambiguity) {
       return new KomlaOperationError(
         'PROJECT_AMBIGUOUS',
@@ -2332,8 +2371,18 @@ export class KomlaOperationService {
     };
   }
 
-  private resolveProjectSelector(selector: string): KomlaOperationProject {
-    const projects = this.dependencies.listProjects();
+  /**
+   * The project a selector names, among those the caller may name: a project outside a limited
+   * caller's projects is not found, and its errors list only the caller's own.
+   */
+  private resolveProjectSelector(
+    selector: string,
+    context: KomlaOperationContext = {}
+  ): KomlaOperationProject {
+    const projects =
+      context.allowedProjectIds || context.sshOnly
+        ? this.scopedProjects(context)
+        : this.dependencies.listProjects();
     const exact = projects.find((project) => project.id === selector);
     if (exact) return exact;
     const matches = projects.filter(
@@ -2534,6 +2583,12 @@ export class KomlaOperationService {
           !context.sshHostId ||
           (workspace.backend?.kind === 'ssh' && workspace.backend.hostId === context.sshHostId)
       )
+      .filter(
+        (workspace) =>
+          (!context.allowedProjectIds ||
+            (!!workspace.projectId && context.allowedProjectIds.includes(workspace.projectId))) &&
+          (!context.sshOnly || workspace.backend?.kind === 'ssh')
+      )
       .map((workspace) => {
         const project = workspace.projectId
           ? this.dependencies.getProject(workspace.projectId)
@@ -2548,7 +2603,10 @@ export class KomlaOperationService {
           environment: this.workspaceEnvironment(workspace),
           ...(workspace.status === 'trashed' && { trashed: true as const }),
           agentActive: workspace.agentActive === true,
-          ...(workspace.attention && { attention: workspace.attention.kind }),
+          ...(workspace.attention &&
+            this.mayShowAttention(context, workspace, workspace.attention) && {
+              attention: workspace.attention.kind,
+            }),
           ...(workspace.tag && { tag: workspace.tag }),
           ...(workspace.markers?.length && {
             markers: workspace.markers.map(({ key, label, tone, spinner }) => ({
@@ -2565,6 +2623,41 @@ export class KomlaOperationService {
         };
       });
     return { workspaces };
+  }
+
+  /** A caller kept off this computer doesn't hear from a terminal on it, as devices don't. */
+  private mayShowAttention(
+    context: KomlaOperationContext,
+    workspace: KomlaOperationWorkspace,
+    attention: WorkspaceAttention
+  ): boolean {
+    if (!context.sshOnly) return true;
+    const terminal = attention.terminalId
+      ? workspace.terminals?.find((candidate) => candidate.id === attention.terminalId)
+      : undefined;
+    return terminal?.executionLocation !== 'local-copy';
+  }
+
+  private listProjects(context: KomlaOperationContext): KomlaOperationResults['project.list'] {
+    return { projects: this.visibleProjects(context) };
+  }
+
+  /**
+   * The projects the caller may name. Folder projects only ever run on this computer, so a caller
+   * that may not use it, or one reaching Komla through an SSH host's tunnel, doesn't get them.
+   */
+  private visibleProjects(context: KomlaOperationContext): Array<{ id: string; name: string }> {
+    return this.scopedProjects(context).map(({ id, name }) => ({ id, name }));
+  }
+
+  private scopedProjects(context: KomlaOperationContext): KomlaOperationProject[] {
+    return this.dependencies
+      .listProjects()
+      .filter(
+        (project) =>
+          (!context.allowedProjectIds || context.allowedProjectIds.includes(project.id)) &&
+          (!(context.sshOnly || context.sshHostId) || project.kind !== 'directory')
+      );
   }
 
   /**

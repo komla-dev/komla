@@ -304,6 +304,10 @@ export const komlaOperationSchema = z.discriminatedUnion('type', [
     .strict()
     .describe("The user's tags, in their list's order."),
   z
+    .object({ type: z.literal('project.list') })
+    .strict()
+    .describe('The projects a workspace launch can name with `project`.'),
+  z
     .object({
       type: z.literal('workspace.tag'),
       tag: workspaceTagNameSchema.optional(),

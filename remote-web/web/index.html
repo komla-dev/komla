@@ -431,6 +431,68 @@
           </button>
           <p id="push-hint" class="settings-hint" hidden></p>
         </section>
+        <section
+          id="agent-access"
+          class="settings-group"
+          aria-labelledby="agent-access-title"
+          hidden
+        >
+          <div class="settings-row">
+            <span class="settings-text">
+              <strong id="agent-access-title">Agent access</strong>
+              <small>Let an agent on your tailnet start workspaces</small>
+            </span>
+          </div>
+          <ul id="agent-token-list" class="agent-token-list" hidden></ul>
+          <button id="agent-token-add" type="button" class="settings-button">Add an agent</button>
+          <form id="agent-token-form" class="agent-token-form" hidden>
+            <label class="agent-token-field">
+              <span>Name</span>
+              <input
+                id="agent-token-label"
+                type="text"
+                autocomplete="off"
+                placeholder="Grok bot"
+                required
+              />
+            </label>
+            <fieldset id="agent-token-projects" class="settings-choice">
+              <legend>Projects it may start workspaces in</legend>
+            </fieldset>
+            <label class="agent-token-field">
+              <span>Where</span>
+              <select id="agent-token-where">
+                <option value="ssh" selected>SSH hosts only</option>
+                <option value="anywhere">SSH hosts and this computer</option>
+              </select>
+            </label>
+            <label class="agent-token-field">
+              <span>Works for</span>
+              <select id="agent-token-lifetime"></select>
+            </label>
+            <p id="agent-token-never-warning" class="settings-hint agent-token-warning" hidden>
+              Anyone who copies this token can start agents in these projects until you revoke it.
+            </p>
+            <div class="agent-token-actions">
+              <button id="agent-token-cancel" type="button" class="settings-button">Cancel</button>
+              <button id="agent-token-approve" type="submit" class="settings-button primary">
+                Approve
+              </button>
+            </div>
+          </form>
+          <div id="agent-token-created" class="agent-token-created" hidden>
+            <p class="settings-hint">Copy the token now. Komla won't show it again.</p>
+            <code id="agent-token-value" class="agent-token-secret"></code>
+            <button id="agent-token-copy" type="button" class="settings-button">Copy token</button>
+            <p class="settings-hint">The agent sends it as a bearer token to:</p>
+            <code id="agent-mcp-url" class="agent-token-secret"></code>
+            <button id="agent-mcp-url-copy" type="button" class="settings-button">
+              Copy MCP address
+            </button>
+            <button id="agent-token-done" type="button" class="settings-button">Done</button>
+          </div>
+          <p id="agent-token-hint" class="settings-hint" hidden></p>
+        </section>
         <section class="settings-group">
           <div class="settings-row">
             <span class="settings-text">

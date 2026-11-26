@@ -109,6 +109,8 @@ export interface RemoteControlDirectServiceDeps {
     enable(): void;
     disable(): void;
   };
+  /** Answers an Outside Agent's MCP request to `/remote/mcp` (ADR 0013). */
+  handleAgentMcpRequest?: (req: IncomingMessage, res: ServerResponse) => void;
 }
 
 class DirectPeerSession {
@@ -280,6 +282,7 @@ class DirectPeerSession {
         REMOTE_CAPABILITIES.PROJECT_ICONS,
         REMOTE_CAPABILITIES.WORKSPACE_TAGS,
         REMOTE_CAPABILITIES.BACKGROUND_SESSION,
+        REMOTE_CAPABILITIES.AGENT_TOKENS,
       ],
       servedBuild: this.opts.servedBuild,
       onPairVerifying: () => {},
@@ -345,6 +348,7 @@ export class RemoteControlDirectService {
     terminalPresentationTracking: NonNullable<
       RemoteControlDirectServiceDeps['terminalPresentationTracking']
     >;
+    handleAgentMcpRequest: NonNullable<RemoteControlDirectServiceDeps['handleAgentMcpRequest']>;
   };
 
   constructor(deps: RemoteControlDirectServiceDeps = {}) {
@@ -381,6 +385,7 @@ export class RemoteControlDirectService {
         enable: () => remoteControlSessionService.enableTerminalPresentationTracking(),
         disable: () => remoteControlSessionService.disableTerminalPresentationTracking(),
       },
+      handleAgentMcpRequest: deps.handleAgentMcpRequest ?? handleAgentMcpRequest,
     };
   }
 
@@ -662,6 +667,15 @@ export class RemoteControlDirectService {
         'cache-control': 'no-store',
       });
       res.end(JSON.stringify({ fingerprint: this.info.fingerprint, wsUrl: this.info.wsUrl }));
+      return;
+    }
+    if (pathname === '/remote/mcp') {
+      if (!this.info) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not-ready' }));
+        return;
+      }
+      this.deps.handleAgentMcpRequest(req, res);
       return;
     }
     if (pathname === '/remote/health') {
@@ -1124,6 +1138,29 @@ function wrapElectronInstallIdentity(): RemoteControlInstallIdentity {
       return new Uint8Array(sig);
     },
   };
+}
+
+// The MCP SDK and Komla Operations load with the first Outside Agent's request, not with Komla.
+function handleAgentMcpRequest(req: IncomingMessage, res: ServerResponse): void {
+  Promise.all([
+    import('./outside-agent-mcp'),
+    import('./agent-token.service'),
+    import('./komla-operation.service'),
+  ])
+    .then(([{ handleOutsideAgentMcpRequest }, { agentTokenService }, { komlaOperationService }]) =>
+      handleOutsideAgentMcpRequest(req, res, {
+        authenticate: (bearer) => agentTokenService.authenticate(bearer),
+        getConfig: () => configService.get(),
+        execute: (context, operation) => komlaOperationService.execute(context, operation),
+      })
+    )
+    .catch((error) => {
+      logger.error('outside agent MCP route failed to load', error);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
+    });
 }
 
 export const remoteControlDirectService = new RemoteControlDirectService();

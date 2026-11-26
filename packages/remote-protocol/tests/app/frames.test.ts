@@ -484,6 +484,59 @@ describe('remote app frames', () => {
     expect(hosts([{ ...host, extra: true }])).toBeNull();
   });
 
+  it('parses agent token frames and refuses what the desktop would never make', () => {
+    const summary = {
+      id: 'tok-1',
+      label: 'Grok bot',
+      projectIds: ['web'],
+      sshOnly: true,
+      createdAt: 1,
+      expiresAt: 2,
+    };
+    const create = (fields: Record<string, unknown>) =>
+      parseRemoteAppFrame({
+        type: 'app:agent-token:create',
+        requestId: 'a1',
+        label: 'Grok bot',
+        projectIds: ['web'],
+        lifetimeDays: 30,
+        ...fields,
+      });
+
+    expect(parseRemoteAppFrame({ type: 'app:agent-tokens:list', requestId: 'a1' })).not.toBeNull();
+    expect(
+      parseRemoteAppFrame({ type: 'app:agent-tokens', requestId: 'a1', tokens: [summary] })
+    ).not.toBeNull();
+    expect(create({})).not.toBeNull();
+    expect(create({ sshOnly: false })).not.toBeNull();
+    expect(create({ sshOnly: 'no' })).toBeNull();
+    expect(
+      parseRemoteAppFrame({
+        type: 'app:agent-tokens',
+        requestId: 'a1',
+        tokens: [{ ...summary, sshOnly: undefined }],
+      })
+    ).toBeNull();
+    expect(create({ lifetimeDays: 365 })).toBeNull();
+    expect(create({ lifetimeDays: null })).not.toBeNull();
+    expect(
+      parseRemoteAppFrame({
+        type: 'app:agent-tokens',
+        requestId: 'a1',
+        tokens: [{ ...summary, expiresAt: null }],
+      })
+    ).not.toBeNull();
+    expect(create({ projectIds: [] })).toBeNull();
+    expect(create({ label: 'x'.repeat(65) })).toBeNull();
+    const created = (token: string) =>
+      parseRemoteAppFrame({ type: 'app:agent-token:created', requestId: 'a1', token, summary });
+    expect(created(`komla_agent_${'A'.repeat(43)}`)).not.toBeNull();
+    expect(created('not-a-token')).toBeNull();
+    expect(
+      parseRemoteAppFrame({ type: 'app:agent-token:revoke', requestId: 'a1', id: 'tok-1' })
+    ).not.toBeNull();
+  });
+
   it('parses Web Push subscription frames and rejects keys a browser cannot produce', () => {
     const subscription = {
       endpoint: 'https://web.push.apple.com/QGuQyavXutnMH8Eu8',

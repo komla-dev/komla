@@ -111,6 +111,7 @@ import type {
   LocalCopySyncStatus,
 } from '../shared/types';
 import type { AgentSkill, AgentSkillFamily, AgentSkillPlace } from '../shared/types/agent-skill';
+import type { AgentTokenSummary } from '../shared/types/agent-token';
 import type { AgentUsage, AgentUsageSource } from '../shared/types/agent-usage';
 import type {
   Automation,
@@ -2880,6 +2881,18 @@ const api = {
     };
     ipcRenderer.on(IPC.PAIRED_DEVICES_CHANGED, handler);
     return () => ipcRenderer.removeListener(IPC.PAIRED_DEVICES_CHANGED, handler);
+  },
+
+  // Agent Tokens for Outside Agents (ADR 0013)
+  agentTokensList: (): Promise<AgentTokenSummary[]> => ipcRenderer.invoke(IPC.AGENT_TOKENS_LIST),
+  agentTokensRevoke: (id: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.AGENT_TOKENS_REVOKE, { id }),
+  onAgentTokensChanged: (callback: (tokens: AgentTokenSummary[]) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, tokens: AgentTokenSummary[]): void => {
+      callback(tokens);
+    };
+    ipcRenderer.on(IPC.AGENT_TOKENS_CHANGED, handler);
+    return () => ipcRenderer.removeListener(IPC.AGENT_TOKENS_CHANGED, handler);
   },
 };
 

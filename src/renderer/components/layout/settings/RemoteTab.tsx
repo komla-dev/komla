@@ -19,6 +19,7 @@ import {
   type RemotePasskeyWindowMinutes,
 } from '../../../../shared/lib/remote-passkey-window';
 
+import { RemoteAgentTokensCard } from './RemoteAgentTokensCard';
 import { RemoteHostAccessCard, useHostAccess } from './RemoteHostAccessCard';
 import { RemotePairDialog } from './RemotePairDialog';
 import {
@@ -675,6 +676,8 @@ export function RemoteTab() {
           ))
         )}
       </SettingsCard>
+
+      <RemoteAgentTokensCard mcpUrl={server ? `${server.httpOrigin}/remote/mcp` : null} />
 
       {tailscaleInstalled && !needsSignIn && (
         <div className={cn(SETTINGS_CARD_CLASS, 'px-5 py-4')}>

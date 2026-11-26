@@ -77,6 +77,17 @@ vi.mock('../../../../src/main/services/remote-control-host-access.service', () =
   remoteControlHostAccessService: mockRemoteControlHostAccessService,
 }));
 
+const mockAgentTokenService = vi.hoisted(() => ({
+  list: vi.fn(() => []),
+  revoke: vi.fn(() => true),
+  revokeAll: vi.fn(),
+  onChange: vi.fn(() => () => {}),
+}));
+
+vi.mock('../../../../src/main/services/agent-token.service', () => ({
+  agentTokenService: mockAgentTokenService,
+}));
+
 const mockRemoteControlDirectService = {
   getInfo: vi.fn(() => ({
     host: '127.0.0.1',
@@ -206,8 +217,9 @@ describe('registerRemoteControlHandlers', () => {
 
     registerRemoteControlHandlers();
 
-    // Eight direct remote-control, two SSH host access and three paired-device handlers.
-    expect(ipcMain.handle).toHaveBeenCalledTimes(13);
+    // Eight direct remote-control, two SSH host access, three paired-device and two agent token
+    // handlers.
+    expect(ipcMain.handle).toHaveBeenCalledTimes(15);
     expect(ipcMain._getHandler('remote-control:enable')).toBeUndefined();
     expect(ipcMain._getHandler('remote-control:get-state')).toBeUndefined();
     expect(ipcMain._getHandler('remote-control:disconnect-active')).toBeDefined();
@@ -223,6 +235,20 @@ describe('registerRemoteControlHandlers', () => {
     expect(ipcMain._getHandler('paired-devices:list')).toBeDefined();
     expect(ipcMain._getHandler('paired-devices:rename')).toBeDefined();
     expect(ipcMain._getHandler('paired-devices:remove')).toBeDefined();
+    expect(ipcMain._getHandler('agent-tokens:list')).toBeDefined();
+    expect(ipcMain._getHandler('agent-tokens:revoke')).toBeDefined();
+  });
+
+  it('lists and revokes agent tokens, and ends them all when remote control turns off', async () => {
+    const { registerRemoteControlHandlers, ipcMain } = await setup();
+    registerRemoteControlHandlers();
+
+    await expect(ipcMain._invoke('agent-tokens:list')).resolves.toEqual([]);
+    await ipcMain._invoke('agent-tokens:revoke', { id: 'tok-1' });
+    expect(mockAgentTokenService.revoke).toHaveBeenCalledWith('tok-1');
+
+    await ipcMain._invoke('remote-control:direct-stop');
+    expect(mockAgentTokenService.revokeAll).toHaveBeenCalledTimes(1);
   });
 
   it('routes direct remote-control IPC to the direct service', async () => {
