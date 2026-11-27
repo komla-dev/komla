@@ -92,14 +92,14 @@ async function launchLocal(
   request: { trigger: 'schedule' | 'manual'; scheduledFor?: number; startedAt: number }
 ): Promise<{ workspaceId: string; branch?: string }> {
   const project = automation.projectId ? projectService.get(automation.projectId) : undefined;
-  if (!project) throw new Error('Its project is no longer in Komla.');
+  if (!automation.scratch && !project) throw new Error('Its project is no longer in Komla.');
   const instant = request.scheduledFor ?? request.startedAt;
   const { timeZone } = automation.schedule;
-  const isFolder = project.kind === 'directory';
+  const isFolder = project?.kind === 'directory';
   const created = await workspaceService.create({
-    mode: isFolder ? 'directory' : 'worktree',
-    projectId: project.id,
-    ...(isFolder
+    mode: !project || isFolder ? 'directory' : 'worktree',
+    ...(project ? { projectId: project.id } : { scratch: true }),
+    ...(!project || isFolder
       ? {}
       : {
           branchName: automationBranchName(automation.name, instant, timeZone),
@@ -184,7 +184,46 @@ export function previewAutomationCommand(
   return { command };
 }
 
+/** What the host needs to start an automation's agent: its preset's POSIX commands. */
+function compileLaunchForHost(automation: SshAutomation): HostAutomation['launch'] & {
+  presetId: string;
+} {
+  const preset = agentPresetService.getPresetForWorkspace(automation.presetId);
+  if (!preset) throw new Error('Choose an agent.');
+  const template = agentPresetService.resolvePosixPromptTemplate(preset, automation.launchModeId, {
+    reasoningLevelId: automation.reasoningLevelId,
+    extraArguments: automation.extraArguments,
+  });
+  if (!template) {
+    throw new Error(`${preset.name} can't start with a prompt on an SSH host.`);
+  }
+  return { agentName: preset.name, ...template, presetId: preset.id };
+}
+
 async function compileForHost(automation: SshAutomation): Promise<HostAutomation> {
+  if (automation.scratch) {
+    const { presetId, ...launch } = compileLaunchForHost(automation);
+    return {
+      schema: 1,
+      id: automation.id,
+      name: automation.name,
+      prompt: automation.prompt,
+      enabled: automation.enabled,
+      schedule: automation.schedule,
+      missedRunGraceMinutes: automation.missedRunGraceMinutes,
+      scratch: true,
+      launch,
+      desktop: {
+        presetId,
+        ...(automation.launchModeId ? { launchModeId: automation.launchModeId } : {}),
+        ...(automation.reasoningLevelId ? { reasoningLevelId: automation.reasoningLevelId } : {}),
+        ...(automation.extraArguments ? { extraArguments: automation.extraArguments } : {}),
+      },
+      createdAt: automation.createdAt,
+      updatedAt: automation.updatedAt,
+      writtenBy: configService.getWorkspaceSyncDeviceId(),
+    };
+  }
   const project = automation.projectId ? projectService.get(automation.projectId) : undefined;
   if (!project) throw new Error('Choose a project.');
   if (project.kind === 'directory') {
@@ -195,15 +234,7 @@ async function compileForHost(automation: SshAutomation): Promise<HostAutomation
   if (!gitUrl) {
     throw new Error(`Add a Git remote to ${project.name} to run it on an SSH host.`);
   }
-  const preset = agentPresetService.getPresetForWorkspace(automation.presetId);
-  if (!preset) throw new Error('Choose an agent.');
-  const template = agentPresetService.resolvePosixPromptTemplate(preset, automation.launchModeId, {
-    reasoningLevelId: automation.reasoningLevelId,
-    extraArguments: automation.extraArguments,
-  });
-  if (!template) {
-    throw new Error(`${preset.name} can't start with a prompt on an SSH host.`);
-  }
+  const { presetId, ...launch } = compileLaunchForHost(automation);
   const baseBranch = normalizeSshTargetBranch(project.baseBranch);
   const startBranch = normalizeSshTargetBranch(automation.startBranch);
   if (startBranch) {
@@ -239,10 +270,10 @@ async function compileForHost(automation: SshAutomation): Promise<HostAutomation
       ...(branchPrefix ? { branchPrefix } : {}),
     },
     ...(startBranch ? { startBranch } : {}),
-    launch: { agentName: preset.name, ...template },
+    launch,
     desktop: {
       projectId: project.id,
-      presetId: preset.id,
+      presetId,
       ...(automation.launchModeId ? { launchModeId: automation.launchModeId } : {}),
       ...(automation.reasoningLevelId ? { reasoningLevelId: automation.reasoningLevelId } : {}),
       ...(automation.extraArguments ? { extraArguments: automation.extraArguments } : {}),
@@ -301,14 +332,13 @@ export const automationService = new AutomationService({
     const projectOf = await workspaceService.sshRepositoryProjectLookup();
     return automations.map((automation) => {
       const savedProjectId = automation.desktop?.projectId;
-      const projectId =
-        savedProjectId && projectService.get(savedProjectId)
+      const { project } = automation;
+      // One whose runs start in Scratch workspaces has no project.
+      const projectId = !project
+        ? undefined
+        : savedProjectId && projectService.get(savedProjectId)
           ? savedProjectId
-          : projectOf({
-              hostId,
-              remoteRepoPath: automation.project.remoteRepoPath,
-              gitUrl: automation.project.gitUrl,
-            });
+          : projectOf({ hostId, remoteRepoPath: project.remoteRepoPath, gitUrl: project.gitUrl });
       const desktop = automation.desktop;
       const savedPresetId = desktop?.presetId;
       const presetId =

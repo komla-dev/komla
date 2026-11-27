@@ -342,7 +342,7 @@ pub(crate) fn create_workspace_from(
             &workspace_id,
             &terminal_id,
             &directory,
-            &source.target_branch,
+            Some(&source.target_branch),
         ),
         command: match &request.prompt {
             Some(prompt) => launch
@@ -392,6 +392,102 @@ pub(crate) fn create_workspace_from(
         return Err(error);
     }
     Ok(created)
+}
+
+/// The folder under Komla's data that holds Scratch workspaces' folders.
+pub(crate) const SCRATCH_DIRECTORY: &str = "scratch";
+
+/// A Scratch workspace started on this host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CreatedScratchWorkspace {
+    pub(crate) workspace_id: String,
+    pub(crate) path: PathBuf,
+}
+
+/// Creates a Scratch workspace: an empty folder under `<base>/scratch/`, named `folder_name` or
+/// the first free `folder_name-<n>`, with the agent started there with `prompt`. Its manifest asks
+/// the next installation to add it, which then keeps it: a scratch folder on a host stays with
+/// one installation.
+pub(crate) fn create_scratch_workspace(
+    caller: &OfflineCaller,
+    launch: &ManifestLaunch,
+    folder_name: &str,
+    request: &OfflineLaunchRequest,
+    launcher: &mut dyn SessionLauncher,
+    now_ms: u64,
+) -> anyhow::Result<CreatedScratchWorkspace> {
+    // Made before the folder, so failing to make them leaves no folder behind.
+    let workspace_id = random_workspace_id()?;
+    let terminal_id = random_uuid()?;
+    let root = caller.base.join(SCRATCH_DIRECTORY);
+    fs::create_dir_all(&root).with_context(|| format!("could not create {}", root.display()))?;
+    let mut directory = None;
+    for attempt in 1..=MAX_NAME_ATTEMPTS {
+        let candidate = if attempt == 1 {
+            root.join(folder_name)
+        } else {
+            root.join(format!("{folder_name}-{attempt}"))
+        };
+        // Not create_dir_all, so a folder made meanwhile fails instead of being shared.
+        match fs::create_dir(&candidate) {
+            Ok(()) => {
+                directory = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("could not create {}", candidate.display()))
+            }
+        }
+    }
+    let directory = directory
+        .with_context(|| format!("could not find a free scratch folder name like {folder_name}"))?;
+    let name = request
+        .name
+        .clone()
+        .unwrap_or_else(|| title_from_branch(folder_name));
+    let session = TerminalSession {
+        terminal_id: terminal_id.clone(),
+        directory: directory.clone(),
+        environment: terminal_environment(caller, &workspace_id, &terminal_id, &directory, None),
+        command: match &request.prompt {
+            Some(prompt) => launch
+                .prompt_command
+                .replace("{{prompt}}", &shell_quote(prompt)),
+            None => launch.open_command.clone(),
+        },
+        installation_key: caller.installation_key.clone(),
+        login_shell: caller.login_shell.clone(),
+    };
+    let manifest = json!({
+        "schema": 1,
+        "workspaceId": workspace_id,
+        "name": name,
+        "customName": request.name,
+        "customDescription": request.description,
+        "backend": {"remoteDirectory": directory, "scratch": true},
+        "terminals": [{"id": terminal_id, "name": launch.agent_name, "createdAt": now_ms}],
+        "primaryTerminalId": terminal_id,
+        "createdAt": now_ms,
+        "updatedAt": now_ms,
+        "launch": launch,
+        "adoptOnConnect": true,
+    });
+
+    let started = launcher.start(&session).and_then(|()| {
+        write_manifest(&caller.base, &workspace_id, &manifest).inspect_err(|_| {
+            launcher.stop(&terminal_id);
+        })
+    });
+    if let Err(error) = started {
+        let _ = fs::remove_dir_all(&directory);
+        return Err(error);
+    }
+    Ok(CreatedScratchWorkspace {
+        workspace_id,
+        path: directory,
+    })
 }
 
 fn find_source_manifest(caller: &OfflineCaller) -> anyhow::Result<SourceManifest> {
@@ -630,7 +726,7 @@ pub(crate) fn terminal_environment(
     workspace_id: &str,
     terminal_id: &str,
     directory: &Path,
-    target_branch: &str,
+    target_branch: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut environment = caller.shared_environment.clone();
     if let Some(api_url) = &caller.api_url {
@@ -652,7 +748,8 @@ pub(crate) fn terminal_environment(
             "KOMLA_REMOTE_WORKSPACE_DIR",
             Some(directory.to_string_lossy().into_owned()),
         ),
-        ("KOMLA_TARGET_BRANCH", Some(target_branch.to_owned())),
+        // A scratch folder isn't a repository, so it has no branch to target.
+        ("KOMLA_TARGET_BRANCH", target_branch.map(str::to_owned)),
     ];
     for (name, value) in values {
         if let Some(value) = value {

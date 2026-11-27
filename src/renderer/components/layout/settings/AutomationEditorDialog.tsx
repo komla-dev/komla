@@ -139,6 +139,7 @@ export function AutomationEditorDialog({
   const [name, setName] = useState(initial.name);
   const [prompt, setPrompt] = useState(initial.prompt);
   const [projectId, setProjectId] = useState(initial.projectId);
+  const [scratch, setScratch] = useState(initial.scratch);
   const [target, setTarget] = useState(initial.target);
   const [presetId, setPresetId] = useState(initial.presetId);
   const [launchModeId, setLaunchModeId] = useState(initial.launchModeId);
@@ -156,6 +157,7 @@ export function AutomationEditorDialog({
     name,
     prompt,
     projectId,
+    scratch,
     target,
     presetId,
     launchModeId,
@@ -174,7 +176,7 @@ export function AutomationEditorDialog({
     ? projects.filter((project) => project.kind !== 'directory')
     : projects;
   const pickerPresets = agentPickerPresets(presets, activePresets, presetId);
-  const project = projects.find((candidate) => candidate.id === projectId);
+  const project = scratch ? undefined : projects.find((candidate) => candidate.id === projectId);
   const gitProject = project?.kind === 'directory' ? undefined : project;
 
   // The active preset is only known when a run starts, so its levels can't be offered. A level
@@ -190,7 +192,7 @@ export function AutomationEditorDialog({
   const missingFields = [
     !name.trim() && 'a name',
     !prompt.trim() && 'a prompt',
-    !projectId && 'a project',
+    !projectId && !scratch && 'a project',
   ].filter(Boolean);
 
   const handleSave = () => {
@@ -320,14 +322,22 @@ export function AutomationEditorDialog({
               fieldId={fieldId}
               projects={eligibleProjects}
               projectId={projectId}
+              scratch={scratch}
               hosts={hosts}
               target={target}
-              otherDeviceProjectName={!projectId ? automation?.projectName : undefined}
+              otherDeviceProjectName={!projectId && !scratch ? automation?.projectName : undefined}
               onProjectChange={(nextProjectId) => {
                 // Another project's branches differ, so it starts from its own target again.
                 // Matching the project another device saved keeps the branch it chose.
                 if (projectId && nextProjectId !== projectId) setStartBranch('');
                 setProjectId(nextProjectId);
+                setScratch(false);
+              }}
+              onScratchChange={() => {
+                // A scratch folder isn't a repository, so it has no branch to start from.
+                setStartBranch('');
+                setProjectId('');
+                setScratch(true);
               }}
               onTargetChange={setTarget}
             />
@@ -431,7 +441,7 @@ function toSaveParams(
     ...(automation ? { id: automation.id, previousTarget: automation.target } : {}),
     name: values.name.trim(),
     prompt: values.prompt.trim(),
-    projectId: values.projectId,
+    ...(values.scratch ? { scratch: true } : { projectId: values.projectId }),
     target: targetFromValue(values.target),
     ...(values.presetId ? { presetId: values.presetId } : {}),
     ...(values.presetId && values.launchModeId ? { launchModeId: values.launchModeId } : {}),
@@ -501,7 +511,8 @@ function initialValues({
   return {
     name: automation?.name ?? template?.label ?? '',
     prompt: automation?.prompt ?? template?.prompt ?? '',
-    projectId: automation?.projectId ?? onlyProjectId,
+    projectId: automation?.projectId ?? (automation?.scratch ? '' : onlyProjectId),
+    scratch: automation?.scratch === true,
     target: targetValue(automation?.target ?? defaultTarget),
     presetId: automation ? (automation.presetId ?? '') : (agent?.presetId ?? ''),
     launchModeId: automation ? (automation.launchModeId ?? '') : (agent?.launchModeId ?? ''),
@@ -710,11 +721,13 @@ interface ProjectTargetFieldsProps {
   fieldId: string;
   projects: Project[];
   projectId: string;
+  scratch: boolean;
   hosts: SshHost[];
   target: string;
   /** The project another device saved, when it isn't set up here. */
   otherDeviceProjectName: string | undefined;
   onProjectChange: (projectId: string) => void;
+  onScratchChange: () => void;
   onTargetChange: (target: string) => void;
 }
 
@@ -722,10 +735,12 @@ function ProjectTargetFields({
   fieldId,
   projects,
   projectId,
+  scratch,
   hosts,
   target,
   otherDeviceProjectName,
   onProjectChange,
+  onScratchChange,
   onTargetChange,
 }: ProjectTargetFieldsProps) {
   return (
@@ -738,7 +753,9 @@ function ProjectTargetFields({
           id={`${fieldId}-project`}
           projects={projects}
           projectId={projectId}
+          scratch={scratch}
           onChange={onProjectChange}
+          onScratchChange={onScratchChange}
         />
         {otherDeviceProjectName && (
           <p className="text-xs text-muted-foreground">

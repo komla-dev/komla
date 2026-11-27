@@ -27,6 +27,7 @@ import type { WorkspaceLifecycle } from './lifecycle';
 import type { WorkspaceNaming } from './naming';
 import type { Project, Workspace } from '../../../shared/types';
 import type {
+  SshScratchWorkspaceManifest,
   SshWorkspaceManifest,
   SshWorkspaceRemovedOnOtherDevice,
 } from '../../../shared/types/ssh-workspace-manifest';
@@ -354,6 +355,49 @@ export class SshWorkspaceAdoption {
       this.windowWithMostWorkspacesOf(workspace.projectId) ??
       windowService.getMainWindowId();
     // It goes on top, like a workspace created here.
+    for (const existingWorkspace of workspaceStore.workspaces.values()) {
+      existingWorkspace.order = (existingWorkspace.order ?? 0) + 1;
+    }
+    workspaceStore.workspaces.set(workspace.id, workspace);
+    this.deps.attention.restored(workspace, agentSources);
+    workspaceStore.saveWorkspaces();
+    workspaceStore.broadcastWorkspacesChanged();
+    return workspace;
+  }
+
+  /**
+   * Adds a Scratch workspace an automation's run started on its SSH host. Like one made here, it
+   * belongs to no project, and deleting it for good deletes its folder there.
+   */
+  addAdoptedSshScratchWorkspace(hostId: string, manifest: SshScratchWorkspaceManifest): Workspace {
+    const { workspace, agentSources } = hydrateWorkspace({
+      _version: WORKSPACE_VERSION,
+      id: manifest.workspaceId,
+      name: manifest.name,
+      customName: manifest.customName,
+      customDescription: manifest.customDescription,
+      workingDirectory: `ssh://${hostId}${manifest.backend.remoteDirectory}`,
+      backend: {
+        kind: 'ssh',
+        hostId,
+        remoteDirectory: manifest.backend.remoteDirectory,
+        scratch: true,
+      },
+      scratch: true,
+      isWorktree: false,
+      projectId: null,
+      primaryTerminalId: manifest.primaryTerminalId,
+      terminals: manifest.terminals.map((terminal) => ({
+        ...terminal,
+        executionLocation: 'workspace',
+      })),
+      windowId: null,
+      categoryId: null,
+      createdAt: manifest.createdAt,
+      lastActivityAt: Math.max(manifest.createdAt, manifest.updatedAt),
+      order: 0,
+    });
+    workspace.windowId = windowService.getMainWindowId();
     for (const existingWorkspace of workspaceStore.workspaces.values()) {
       existingWorkspace.order = (existingWorkspace.order ?? 0) + 1;
     }

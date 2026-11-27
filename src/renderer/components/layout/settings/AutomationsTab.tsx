@@ -375,8 +375,10 @@ function TargetCard({
           automation={automation}
           runs={snapshot.runs[automation.id] ?? []}
           projectName={
-            projects.find((project) => project.id === automation.projectId)?.name ??
-            automation.projectName
+            automation.scratch
+              ? 'Scratch workspace'
+              : (projects.find((project) => project.id === automation.projectId)?.name ??
+                automation.projectName)
           }
           workspaceIds={workspaceIds}
           busy={busyIds.has(automation.id)}

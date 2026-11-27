@@ -105,6 +105,22 @@ function savedAgent(
   };
 }
 
+/**
+ * Where runs start as saved: a project, from its branch if one is chosen, or a new Scratch
+ * workspace, which isn't a repository and so has no branch to start from.
+ */
+function savedPlace(
+  params: SaveAutomationParams
+): Pick<Automation, 'projectId' | 'scratch' | 'startBranch'> {
+  if (params.scratch) {
+    if (params.projectId) throw new Error('Choose a project for the runs, or a Scratch workspace.');
+    return { scratch: true };
+  }
+  if (!params.projectId) throw new Error('Choose a project for the runs, or a Scratch workspace.');
+  const startBranch = params.startBranch?.trim();
+  return { projectId: params.projectId, ...(startBranch ? { startBranch } : {}) };
+}
+
 function sameTarget(a: AutomationTarget, b: AutomationTarget): boolean {
   return a.kind === b.kind && (a.kind === 'local' || a.hostId === (b as typeof a).hostId);
 }
@@ -208,6 +224,7 @@ export class AutomationService {
     if (prompt.length > MAX_PROMPT_LENGTH) throw new Error('The prompt is too long.');
     const scheduleError = automationScheduleError(params.schedule);
     if (scheduleError) throw new Error(scheduleError);
+    const place = savedPlace(params);
     const agent = savedAgent(params);
 
     const previousTarget = params.previousTarget ?? params.target;
@@ -217,10 +234,9 @@ export class AutomationService {
       id: params.id ?? this.dependencies.newId(),
       name,
       prompt,
-      projectId: params.projectId,
+      ...place,
       target: params.target,
       ...agent,
-      ...(params.startBranch?.trim() ? { startBranch: params.startBranch.trim() } : {}),
       schedule: { cron: params.schedule.cron.trim(), timeZone: params.schedule.timeZone },
       enabled: params.enabled,
       missedRunGraceMinutes: params.missedRunGraceMinutes,
@@ -301,20 +317,17 @@ export class AutomationService {
     let saved = false;
     for (const [index, automation] of automations.entries()) {
       const projectId = resolved[index]?.projectId;
-      if (!projectId || !projectIds.includes(projectId)) continue;
+      const compiled = automation.project;
+      if (!compiled || !projectId || !projectIds.includes(projectId)) continue;
       // Read now, so a later change that waited for this save isn't undone by an earlier one.
       const settings = this.dependencies.projectGitSettings(projectId);
       if (
-        automation.project.baseBranch === settings.baseBranch &&
-        automation.project.branchPrefix === settings.branchPrefix
+        compiled.baseBranch === settings.baseBranch &&
+        compiled.branchPrefix === settings.branchPrefix
       ) {
         continue;
       }
-      const {
-        baseBranch: _baseBranch,
-        branchPrefix: _branchPrefix,
-        ...project
-      } = automation.project;
+      const { baseBranch: _baseBranch, branchPrefix: _branchPrefix, ...project } = compiled;
       const retargeted = {
         ...automation,
         project: {
@@ -600,7 +613,8 @@ export class AutomationService {
         prompt: automation.prompt,
         ...resolved[index],
         ...(automation.startBranch ? { startBranch: automation.startBranch } : {}),
-        ...(automation.project.projectName ? { projectName: automation.project.projectName } : {}),
+        ...(automation.scratch ? { scratch: true } : {}),
+        ...(automation.project?.projectName ? { projectName: automation.project.projectName } : {}),
         target,
         agentName: automation.launch.agentName,
         schedule: automation.schedule,

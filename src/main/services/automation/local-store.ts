@@ -18,6 +18,7 @@ const localAutomationSchema = z.object({
   prompt: z.string(),
   projectId: z.string().optional(),
   projectName: z.string().optional(),
+  scratch: z.literal(true).optional(),
   target: z.object({ kind: z.literal('local') }),
   presetId: z.string().optional(),
   launchModeId: z.string().optional(),

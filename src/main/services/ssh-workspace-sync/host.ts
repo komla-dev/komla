@@ -97,6 +97,24 @@ export const sshWorkspaceSyncHost = {
     );
   },
 
+  /** Removes a workspace's manifest, leaving its files, once this installation keeps it alone. */
+  async removeManifest(backend: SshWorkspaceBackend, workspaceId: string): Promise<void> {
+    await sshWorkspaceService.run(
+      sshWorkspaceService.getHost(backend.hostId),
+      `rm -f ${shellQuotePosix(manifestPath(backend, workspaceId))}`
+    );
+  },
+
+  /** Removes a workspace's manifest, resolving to whether this call was the one that removed it. */
+  async claimManifest(backend: SshWorkspaceBackend, workspaceId: string): Promise<boolean> {
+    // Unlinking is atomic: of commands racing for the same file, only one sees rm succeed.
+    const output = await sshWorkspaceService.run(
+      sshWorkspaceService.getHost(backend.hostId),
+      `rm -- ${shellQuotePosix(manifestPath(backend, workspaceId))} 2>/dev/null && printf claimed || true`
+    );
+    return output.trim().split(/\r?\n/).pop() === 'claimed';
+  },
+
   /** Replaces a deleted workspace's manifest with a Tombstone and prunes old Tombstones. */
   async delete(backend: SshWorkspaceBackend, workspaceId: string): Promise<void> {
     const tombstone = tombstonePath(backend, workspaceId);

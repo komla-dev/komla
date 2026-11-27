@@ -1,4 +1,4 @@
-import { CaretDown, Check, Cloud, Desktop } from '@phosphor-icons/react';
+import { CaretDown, Check, Cloud, Desktop, Flask } from '@phosphor-icons/react';
 import { useState, type ReactNode } from 'react';
 
 import { ProjectMark } from '@/components/projects/ProjectMark';
@@ -44,22 +44,32 @@ export function FieldTrigger({
 export const FIELD_MENU_CLASS =
   'max-h-72 w-(--radix-dropdown-menu-trigger-width) min-w-0 overflow-y-auto';
 
+/** Where runs start: one of the projects, or a new Scratch workspace each time. */
 export function ProjectPicker({
   id,
   projects,
   projectId,
+  scratch,
   onChange,
+  onScratchChange,
 }: {
   id: string;
   projects: Project[];
   projectId: string;
+  scratch: boolean;
   onChange: (projectId: string) => void;
+  onScratchChange: () => void;
 }) {
-  const selected = projects.find((project) => project.id === projectId);
+  const selected = scratch ? undefined : projects.find((project) => project.id === projectId);
   return (
     <DropdownMenu>
       <FieldTrigger id={id}>
-        {selected ? (
+        {scratch ? (
+          <>
+            <Flask className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">Scratch workspace</span>
+          </>
+        ) : selected ? (
           <>
             <ProjectMark project={selected} />
             <span className="truncate">{selected.name}</span>
@@ -80,9 +90,15 @@ export function ProjectPicker({
           <DropdownMenuItem key={project.id} onSelect={() => onChange(project.id)}>
             <ProjectMark project={project} />
             <span className="min-w-0 truncate">{project.name}</span>
-            {project.id === projectId && <Check className="ml-auto" />}
+            {project.id === selected?.id && <Check className="ml-auto" />}
           </DropdownMenuItem>
         ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onScratchChange}>
+          <Flask />
+          <span className="min-w-0 truncate">Scratch workspace</span>
+          {scratch && <Check className="ml-auto" />}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

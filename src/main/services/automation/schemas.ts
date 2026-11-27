@@ -37,15 +37,18 @@ export const hostAutomationSchema = z.looseObject({
   enabled: z.boolean(),
   schedule: automationScheduleSchema,
   missedRunGraceMinutes: z.number().finite().nonnegative(),
-  project: z.object({
-    remoteRepoPath: text(4096),
-    remoteProjectRoot: text(4096),
-    gitUrl: text(4096),
-    projectName: text(4096).optional(),
-    baseBranch: text(4096).optional(),
-    defaultBranch: text(4096).optional(),
-    branchPrefix: text(4096).optional(),
-  }),
+  project: z
+    .object({
+      remoteRepoPath: text(4096),
+      remoteProjectRoot: text(4096),
+      gitUrl: text(4096),
+      projectName: text(4096).optional(),
+      baseBranch: text(4096).optional(),
+      defaultBranch: text(4096).optional(),
+      branchPrefix: text(4096).optional(),
+    })
+    .optional(),
+  scratch: z.literal(true).optional(),
   startBranch: text(4096).optional(),
   launch: z.object({
     agentName: text(4096),

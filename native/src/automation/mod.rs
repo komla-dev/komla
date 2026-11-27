@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::offline_workspace::{
-    self, is_valid_branch, CreatedWorkspace, ManifestLaunch, OfflineCaller, OfflineLaunchRequest,
-    SessionLauncher, TmuxSessionLauncher, WorkspaceSource,
+    self, is_valid_branch, ManifestLaunch, OfflineCaller, OfflineLaunchRequest, SessionLauncher,
+    TmuxSessionLauncher, WorkspaceSource,
 };
 use crontab::{Crontab, SystemCrontab};
 use schedule::Due;
@@ -75,7 +75,12 @@ pub(crate) struct HostAutomation {
     pub(crate) enabled: bool,
     pub(crate) schedule: AutomationSchedule,
     pub(crate) missed_run_grace_minutes: i64,
-    pub(crate) project: AutomationProject,
+    /// The repository runs start in. Absent when runs start in Scratch workspaces instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) project: Option<AutomationProject>,
+    /// Each run starts in a new Scratch workspace, outside any project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) scratch: bool,
     /// The branch runs start from instead of the project's, which stays their target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) start_branch: Option<String>,
@@ -181,7 +186,16 @@ fn validate(
     if !launch.prompt_command.contains("{{prompt}}") || launch.open_command.trim().is_empty() {
         bail!("This automation's agent can't be started with a prompt.");
     }
-    let project = &automation.project;
+    let project = match (&automation.project, automation.scratch) {
+        (Some(project), false) => project,
+        (None, true) => {
+            if automation.start_branch.is_some() {
+                bail!("A scratch folder has no branch for runs to start from.");
+            }
+            return Ok(());
+        }
+        _ => bail!("Choose a project for this automation's runs, or a scratch workspace."),
+    };
     if !inside(&project.remote_repo_path, &base.join("repos"))
         || !inside(&project.remote_project_root, &base.join("worktrees"))
     {
@@ -225,6 +239,12 @@ pub(crate) fn target_branch(project: &AutomationProject) -> String {
         .unwrap_or_else(|| "main".to_owned())
 }
 
+/// The workspace a run started in, and its branch unless it's a Scratch workspace.
+struct RunWorkspace {
+    workspace_id: String,
+    branch: Option<String>,
+}
+
 /// Creates the workspace for one run of `automation`, labelled with `at`.
 fn create_run_workspace(
     base: &Path,
@@ -234,27 +254,23 @@ fn create_run_workspace(
     caller: &OfflineCaller,
     launcher: &mut dyn SessionLauncher,
     now_ms: i64,
-) -> anyhow::Result<CreatedWorkspace> {
+) -> anyhow::Result<RunWorkspace> {
     validate(base, automation, true)?;
     let zone = schedule::time_zone(&automation.schedule.time_zone)?;
     let wall = jiff::Timestamp::from_millisecond(at_ms)
         .context("time out of range")?
         .to_zoned(zone);
-    let project = &automation.project;
     let mut slug = offline_workspace::slug(&automation.name);
     if slug.is_empty() {
         slug = "automation".to_owned();
     }
-    let branch = format!(
-        "{}{slug}-{}",
-        project.branch_prefix.as_deref().unwrap_or(""),
-        wall.strftime("%Y%m%d-%H%M")
-    );
+    // Named like a run's branch, so each run's folder or branch says which run it is.
+    let run_name = format!("{slug}-{}", wall.strftime("%Y%m%d-%H%M"));
     let kind = match trigger {
         RunTrigger::Schedule => "Scheduled run",
         RunTrigger::Manual => "Manual run",
     };
-    let request = OfflineLaunchRequest {
+    let mut request = OfflineLaunchRequest {
         prompt: Some(automation.prompt.clone()),
         name: Some(automation.name.clone()),
         description: Some(format!(
@@ -262,10 +278,30 @@ fn create_run_workspace(
             wall.strftime("%Y-%m-%d %H:%M"),
             automation.schedule.time_zone
         )),
-        branch: Some(branch),
+        branch: None,
         from_current_branch: false,
         cwd: None,
     };
+    let now = u64::try_from(now_ms).unwrap_or_default();
+    // validate() checked that it has a project unless it runs in scratch workspaces.
+    let Some(project) = automation.project.as_ref() else {
+        let created = offline_workspace::create_scratch_workspace(
+            caller,
+            &automation.launch,
+            &run_name,
+            &request,
+            launcher,
+            now,
+        )?;
+        return Ok(RunWorkspace {
+            workspace_id: created.workspace_id,
+            branch: None,
+        });
+    };
+    request.branch = Some(format!(
+        "{}{run_name}",
+        project.branch_prefix.as_deref().unwrap_or("")
+    ));
     // Without a project target, the branch runs start from is their target,
     // as for a workspace branched from it in Komla.
     let base_branch = project
@@ -293,13 +329,12 @@ fn create_run_workspace(
         target_branch,
         launch: automation.launch.clone(),
     };
-    offline_workspace::create_workspace_from(
-        caller,
-        &source,
-        &request,
-        launcher,
-        u64::try_from(now_ms).unwrap_or_default(),
-    )
+    let created =
+        offline_workspace::create_workspace_from(caller, &source, &request, launcher, now)?;
+    Ok(RunWorkspace {
+        workspace_id: created.workspace_id,
+        branch: Some(created.branch),
+    })
 }
 
 /// Starts one run and returns its record, failed or not.
@@ -327,7 +362,7 @@ fn start_run(
     match create_run_workspace(base, automation, trigger, at, caller, launcher, now_ms) {
         Ok(created) => {
             run.workspace_id = Some(created.workspace_id);
-            run.branch = Some(created.branch);
+            run.branch = created.branch;
         }
         Err(error) => {
             run.status = RunStatus::Failed;
@@ -746,7 +781,7 @@ pub(crate) mod tests {
                 time_zone: "Europe/Oslo".to_owned(),
             },
             missed_run_grace_minutes: 720,
-            project: AutomationProject {
+            project: Some(AutomationProject {
                 remote_repo_path: base.join("repos/app/repo.git"),
                 remote_project_root: base.join("worktrees/app"),
                 git_url: "git@example.com:app.git".to_owned(),
@@ -754,7 +789,8 @@ pub(crate) mod tests {
                 base_branch: None,
                 default_branch: None,
                 branch_prefix: Some("devuser/".to_owned()),
-            },
+            }),
+            scratch: false,
             start_branch: None,
             launch: ManifestLaunch {
                 agent_name: "Claude Code".to_owned(),
@@ -905,6 +941,116 @@ pub(crate) mod tests {
         assert_eq!(launcher.started.len(), 1);
     }
 
+    #[cfg(unix)]
+    fn scratch_automation(base: &Path) -> HostAutomation {
+        HostAutomation {
+            project: None,
+            scratch: true,
+            ..automation(base)
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_automation_runs_each_time_in_a_new_empty_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join(".komla");
+        let input = serde_json::to_vec(&scratch_automation(&base)).unwrap();
+        let mut crontab = FakeCrontab::default();
+        save(&base, &input, &mut crontab, Path::new("/k"), 0).unwrap();
+        let caller = OfflineCaller {
+            base: base.clone(),
+            cwd: base.clone(),
+            ..OfflineCaller::default()
+        };
+        let mut launcher = RecordingLauncher {
+            started: Vec::new(),
+        };
+
+        let first = run_now(
+            &base,
+            "auto-1",
+            &caller,
+            &mut launcher,
+            at("2026-10-15T07:00:20Z"),
+        )
+        .unwrap();
+        let second = run_now(
+            &base,
+            "auto-1",
+            &caller,
+            &mut launcher,
+            at("2026-10-15T07:00:40Z"),
+        )
+        .unwrap();
+
+        for run in [&first, &second] {
+            assert_eq!(run.status, RunStatus::Started, "{:?}", run.message);
+            assert_eq!(run.branch, None);
+        }
+        let folders: Vec<_> = launcher
+            .started
+            .iter()
+            .map(|s| s.directory.clone())
+            .collect();
+        assert_eq!(
+            folders,
+            [
+                base.join("scratch/nightly-deps-20261015-0900"),
+                base.join("scratch/nightly-deps-20261015-0900-2"),
+            ]
+        );
+        assert!(fs::read_dir(&folders[0]).unwrap().next().is_none());
+        let environment: std::collections::HashMap<_, _> =
+            launcher.started[0].environment.iter().cloned().collect();
+        assert!(!environment.contains_key("KOMLA_TARGET_BRANCH"));
+        assert_eq!(
+            launcher.started[0].command,
+            "claude 'Update the dependencies, it'\\''s Tuesday'"
+        );
+
+        let workspace_id = first.workspace_id.as_deref().unwrap();
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(base.join(format!("workspaces/{workspace_id}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["adoptOnConnect"], true);
+        assert_eq!(manifest["customName"], "Nightly deps");
+        assert_eq!(
+            manifest["backend"],
+            json!({"remoteDirectory": folders[0], "scratch": true})
+        );
+        assert!(manifest.get("branchName").is_none());
+        // Listed for the phone like any other workspace until a device adds it.
+        let listed = offline_workspace::list_workspaces(&base, false).unwrap();
+        assert_eq!(listed["workspaces"].as_array().unwrap().len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_refuses_an_automation_with_both_a_project_and_scratch_or_neither() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join(".komla");
+        let mut crontab = FakeCrontab::default();
+        let both = HostAutomation {
+            scratch: true,
+            ..automation(&base)
+        };
+        let neither = HostAutomation {
+            project: None,
+            ..automation(&base)
+        };
+        let branched = HostAutomation {
+            start_branch: Some("dev".to_owned()),
+            ..scratch_automation(&base)
+        };
+        for automation in [both, neither, branched] {
+            let input = serde_json::to_vec(&automation).unwrap();
+            assert!(save(&base, &input, &mut crontab, Path::new("/k"), 0).is_err());
+        }
+        assert!(store::read_all(&base).is_empty());
+    }
+
     // Automations run on Linux and macOS hosts; store.rs refuses them elsewhere.
 
     #[cfg(unix)]
@@ -1037,8 +1183,8 @@ pub(crate) mod tests {
     fn a_manual_run_starts_from_the_projects_base_branch() {
         let (_temp, base, caller) = host();
         let mut pinned = automation(&base);
-        pinned.project.base_branch = Some("trunk".to_owned());
-        pinned.project.branch_prefix = None;
+        pinned.project.as_mut().unwrap().base_branch = Some("trunk".to_owned());
+        pinned.project.as_mut().unwrap().branch_prefix = None;
         store::write(&base, &pinned).unwrap();
         let mut launcher = RecordingLauncher {
             started: Vec::new(),
@@ -1075,8 +1221,8 @@ pub(crate) mod tests {
         git(&origin, &["add", "RELEASE.md"]);
         git(&origin, &["commit", "--quiet", "-m", "release"]);
         let mut pinned = automation(&base);
-        pinned.project.base_branch = Some("trunk".to_owned());
-        pinned.project.branch_prefix = None;
+        pinned.project.as_mut().unwrap().base_branch = Some("trunk".to_owned());
+        pinned.project.as_mut().unwrap().branch_prefix = None;
         pinned.start_branch = Some("release".to_owned());
         store::write(&base, &pinned).unwrap();
         let mut launcher = RecordingLauncher {
@@ -1159,7 +1305,7 @@ pub(crate) mod tests {
     fn a_save_that_leaves_when_it_runs_doesnt_skip_a_time_still_due() {
         let (_temp, base, caller) = host();
         let mut retargeted = automation(&base);
-        retargeted.project.base_branch = Some("trunk".to_owned());
+        retargeted.project.as_mut().unwrap().base_branch = Some("trunk".to_owned());
         let mut rescheduled = automation(&base);
         rescheduled.schedule.cron = "0 9 * * 1-5".to_owned();
         let mut launcher = RecordingLauncher {
@@ -1312,15 +1458,17 @@ pub(crate) mod tests {
         );
         refuse(&|a| a.launch.prompt_command = "claude".to_owned(), "prompt");
         refuse(
-            &|a| a.project.remote_repo_path = PathBuf::from("/etc/../tmp/repo.git"),
+            &|a| {
+                a.project.as_mut().unwrap().remote_repo_path = PathBuf::from("/etc/../tmp/repo.git")
+            },
             "outside",
         );
         refuse(
-            &|a| a.project.remote_repo_path = base.join("repos/missing/repo.git"),
+            &|a| a.project.as_mut().unwrap().remote_repo_path = base.join("repos/missing/repo.git"),
             "Start one workspace",
         );
         refuse(
-            &|a| a.project.base_branch = Some("--upload-pack=x".to_owned()),
+            &|a| a.project.as_mut().unwrap().base_branch = Some("--upload-pack=x".to_owned()),
             "base branch",
         );
         refuse(

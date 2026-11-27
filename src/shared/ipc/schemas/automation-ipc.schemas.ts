@@ -21,7 +21,8 @@ const saveAutomationSchema = z
     previousTarget: automationTargetSchema.optional(),
     name: z.string().max(200),
     prompt: z.string().max(32_000),
-    projectId: idSchema,
+    projectId: idSchema.optional(),
+    scratch: z.literal(true).optional(),
     target: automationTargetSchema,
     presetId: idSchema.optional(),
     launchModeId: idSchema.optional(),
@@ -42,7 +43,16 @@ const saveAutomationSchema = z
       .min(0)
       .max(7 * 24 * 60),
   })
-  .strict();
+  .strict()
+  // Runs start in a project, or in a new Scratch workspace, which has no branch to start from.
+  .refine((params) => (params.scratch ? !params.projectId : !!params.projectId), {
+    message: 'needs a project or scratch, not both',
+    path: ['projectId'],
+  })
+  .refine((params) => !params.scratch || params.startBranch === undefined, {
+    message: 'a scratch workspace has no branch to start from',
+    path: ['startBranch'],
+  });
 
 export const automationListArgsSchema = z.tuple([
   z.object({ readHosts: z.enum(['all', 'in-use']).optional() }).strict(),

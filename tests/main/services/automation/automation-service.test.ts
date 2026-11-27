@@ -316,6 +316,27 @@ describe('AutomationService', () => {
     });
   });
 
+  it('saves runs that start in Scratch workspaces with no project or branch to start from', async () => {
+    const { service, store } = setup();
+
+    await service.save(
+      saveParams({ projectId: undefined, scratch: true, startBranch: 'release/1.x' })
+    );
+
+    const [saved] = store.state.automations;
+    expect(saved).toMatchObject({ scratch: true });
+    expect(saved).not.toHaveProperty('projectId');
+    expect(saved).not.toHaveProperty('startBranch');
+  });
+
+  it('refuses runs with neither a project nor a Scratch workspace, or both', async () => {
+    const { service, store } = setup();
+
+    await expect(service.save(saveParams({ projectId: undefined }))).rejects.toThrow('project');
+    await expect(service.save(saveParams({ scratch: true }))).rejects.toThrow('project');
+    expect(store.state.automations).toEqual([]);
+  });
+
   it('keeps the branch an automation starts from', async () => {
     const { service, store } = setup();
 
@@ -571,6 +592,25 @@ describe('AutomationService', () => {
       ['host-1', { ...pinned, project }],
     ]);
     expect(changed).toHaveBeenCalled();
+  });
+
+  it('lists a host automation whose runs start in Scratch workspaces, and never retargets it', async () => {
+    const scratch = hostAutomation({ id: 'scratch', project: undefined, scratch: true });
+    const hosts = hostClient({
+      list: vi.fn(async () => ({
+        automations: [scratch],
+        runs: {},
+        scheduler: { available: true },
+      })),
+    });
+    const { service } = setup({ hosts, projectGitSettings: () => ({ baseBranch: 'develop' }) });
+
+    await service.retargetProject('project-1');
+    const [, host] = await service.list();
+
+    expect(hosts.save).not.toHaveBeenCalled();
+    expect(host?.automations[0]).toMatchObject({ id: 'scratch', scratch: true });
+    expect(host?.automations[0]).not.toHaveProperty('projectName');
   });
 
   it('drops the target branch of a project’s host automations when the project has none', async () => {

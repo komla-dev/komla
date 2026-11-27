@@ -70,6 +70,27 @@ export interface SshWorkspaceManifest {
   adoptOnConnect?: boolean;
 }
 
+/**
+ * A Scratch workspace an automation's run started on its SSH host while no Komla installation was
+ * connected, written to the same folder as other manifests. The first installation to connect
+ * adds it and removes the manifest: a scratch folder on a host stays with one installation.
+ */
+export interface SshScratchWorkspaceManifest {
+  schema: 1;
+  workspaceId: string;
+  name: string;
+  customName?: string;
+  customDescription?: string;
+  /** A folder directly in the host's scratch folder. */
+  backend: { remoteDirectory: string; scratch: true };
+  terminals: Array<{ id: string; name: string; createdAt: number }>;
+  primaryTerminalId?: string;
+  createdAt: number;
+  updatedAt: number;
+  launch?: SshWorkspaceLaunch;
+  adoptOnConnect: true;
+}
+
 /** An agent preset's POSIX launch commands, resolved for one workspace. */
 export interface SshWorkspaceLaunch {
   agentName: string;

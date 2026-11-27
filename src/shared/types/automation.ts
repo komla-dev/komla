@@ -15,8 +15,13 @@ export interface Automation {
   id: string;
   name: string;
   prompt: string;
-  /** This installation's project; undefined for an SSH automation whose repository no project here uses. */
+  /**
+   * This installation's project; undefined for one whose runs start in Scratch workspaces, and for
+   * an SSH automation whose repository no project here uses.
+   */
   projectId?: string;
+  /** Each run starts in a new Scratch workspace, outside any project, instead of in a project. */
+  scratch?: true;
   /** Shown when the project isn't on this installation, e.g. one saved by another device. */
   projectName?: string;
   target: AutomationTarget;
@@ -88,7 +93,9 @@ export interface SaveAutomationParams {
   previousTarget?: AutomationTarget;
   name: string;
   prompt: string;
-  projectId: string;
+  /** Where runs start: a project here, or with `scratch`, a new Scratch workspace each time. */
+  projectId?: string;
+  scratch?: true;
   target: AutomationTarget;
   presetId?: string;
   launchModeId?: string;
@@ -141,8 +148,11 @@ export interface HostAutomation {
   enabled: boolean;
   schedule: AutomationSchedule;
   missedRunGraceMinutes: number;
-  /** The repository and worktree root new run workspaces use, like a workspace manifest's backend. */
-  project: {
+  /**
+   * The repository and worktree root new run workspaces use, like a workspace manifest's backend.
+   * Absent for one whose runs start in Scratch workspaces.
+   */
+  project?: {
     remoteRepoPath: string;
     remoteProjectRoot: string;
     gitUrl: string;
@@ -151,6 +161,8 @@ export interface HostAutomation {
     defaultBranch?: string;
     branchPrefix?: string;
   };
+  /** Each run starts in a new Scratch workspace in the host's scratch folder, outside any project. */
+  scratch?: true;
   /**
    * The branch runs start from instead of `project.baseBranch`, which stays their target. Absent,
    * runs follow the project's target branch, which each device that changes it saves again.

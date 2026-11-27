@@ -11,10 +11,12 @@ import {
   type WorkspaceStatus,
 } from '../../../shared/types/workspace';
 import { createLogger } from '../../lib/logger';
+import { isRemoteScratchFolder } from '../ssh-workspace-base-path';
 
 import {
   buildSshWorkspaceManifest,
   mergeSshWorkspaceManifest,
+  parseSshScratchWorkspaceManifest,
   parseSshWorkspaceManifest,
   sshWorkspaceManifestContentKey,
   sshWorkspaceManifestSyncedFieldsEqual,
@@ -25,6 +27,7 @@ import {
 import type { WorkspaceTagAppearance } from '../../../shared/lib/workspace-tags';
 import type {
   RemoteSshWorkspace,
+  SshScratchWorkspaceManifest,
   SshWorkspaceLaunch,
   SshWorkspaceManifest,
 } from '../../../shared/types/ssh-workspace-manifest';
@@ -106,6 +109,13 @@ export interface SshWorkspaceSyncHost {
   ) => Promise<Set<string>>;
   /** Removes a workspace's manifest if its files are gone, so no installation adds it again. */
   removeOrphaned: (backend: SshWorkspaceBackend, workspaceId: string) => Promise<void>;
+  /** Removes a workspace's manifest, leaving its files, once this installation keeps it alone. */
+  removeManifest: (backend: SshWorkspaceBackend, workspaceId: string) => Promise<void>;
+  /**
+   * Removes a workspace's manifest, leaving its files, and resolves to whether this call removed
+   * it: of installations that claim it together, only one gets true.
+   */
+  claimManifest: (backend: SshWorkspaceBackend, workspaceId: string) => Promise<boolean>;
   /** Whether the SSH host is configured here. */
   hasHost: (hostId: string) => boolean;
   /** The SSH hosts configured here whose setup has finished. */
@@ -152,6 +162,8 @@ export interface SshWorkspaceSyncStore {
     manifest: SshWorkspaceManifest,
     placement: SshWorkspacePlacement
   ) => Workspace;
+  /** Adds a Scratch workspace an automation's run started on the host, and saves it. */
+  addScratch: (hostId: string, manifest: SshScratchWorkspaceManifest) => Workspace;
   /** Deletes the workspace here only, leaving its files and manifest on the host. */
   deleteHere: (workspaceId: string) => Promise<void>;
   /** A sync pass read the host, e.g. to check which tabs not attached here run there. */
@@ -459,8 +471,9 @@ export class SshWorkspaceSync {
   private async syncHost(hostId: string): Promise<boolean> {
     const { host, store } = this.dependencies;
     if (!host.hasHost(hostId)) return false;
-    const manifests = await this.reconcileHost(hostId);
-    if (!manifests) return false;
+    const listing = await this.reconcileHost(hostId);
+    if (!listing) return false;
+    const { manifests, scratch } = listing;
     const addAll = this.dependencies.syncsWith(hostId);
     let projects: ReturnType<SshWorkspaceSyncStore['projectLookup']> | undefined;
     // Each goes on top, so the newest ends up first.
@@ -483,7 +496,64 @@ export class SshWorkspaceSync {
         });
       });
     }
+    for (const manifest of scratch) {
+      if (!host.hasHost(hostId)) return false;
+      await this.adoptScratch(hostId, manifest).catch((error) => {
+        logger.warn('Could not add a scratch workspace an automation started on an SSH host', {
+          hostId,
+          workspaceId: manifest.workspaceId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     return true;
+  }
+
+  /**
+   * Adds a Scratch workspace an automation's run started on the host, once this installation
+   * removed its manifest: a scratch folder on a host stays with the one installation that has it,
+   * so no other adds it too. One already here only has a manifest left behind removed again.
+   */
+  private async adoptScratch(hostId: string, manifest: SshScratchWorkspaceManifest): Promise<void> {
+    const { host, store } = this.dependencies;
+    const { workspaceId } = manifest;
+    const backend: SshWorkspaceBackend = { kind: 'ssh', hostId, ...manifest.backend };
+    if (this.deletedHere.has(workspaceId)) {
+      // Its folder went with it, so only a manifest without one is removed.
+      await host.removeOrphaned(backend, workspaceId);
+      return;
+    }
+    const existing = store.get(workspaceId);
+    if (existing) {
+      if (
+        isSshWorkspace(existing) &&
+        existing.backend.hostId === hostId &&
+        existing.backend.remoteDirectory === manifest.backend.remoteDirectory
+      ) {
+        await host.removeManifest(backend, workspaceId);
+      }
+      return;
+    }
+    if (store.isDeleting(workspaceId)) return;
+    const { remoteDirectory } = manifest.backend;
+    if (!isRemoteScratchFolder(await host.basePath(hostId), remoteDirectory)) {
+      throw new Error("That workspace's folder isn't in this host's scratch folder.");
+    }
+    if (this.workspaceInDirectory(hostId, remoteDirectory)) {
+      // Its folder is already a workspace here, so no installation should add it again.
+      await host.removeManifest(backend, workspaceId);
+      return;
+    }
+    const found = await host.inspect(backend, workspaceId);
+    if (found.state !== 'present') {
+      await host.removeOrphaned(backend, workspaceId);
+      return;
+    }
+    // Installations that read the manifest together all get here; the one whose removal of it
+    // succeeds adds the workspace, so only one has it.
+    if (!(await host.claimManifest(backend, workspaceId))) return;
+    if (store.get(workspaceId)) return;
+    store.addScratch(hostId, manifest);
   }
 
   /** Lists the workspaces on an SSH host that any Komla installation has published. */
@@ -659,10 +729,15 @@ export class SshWorkspaceSync {
    * files were missing. Returns the manifests found on the host, or undefined
    * when it couldn't be read.
    */
-  private async reconcileHost(hostId: string): Promise<SshWorkspaceManifest[] | undefined> {
+  private async reconcileHost(
+    hostId: string
+  ): Promise<
+    { manifests: SshWorkspaceManifest[]; scratch: SshScratchWorkspaceManifest[] } | undefined
+  > {
     let manifests: SshWorkspaceManifest[];
+    let scratch: SshScratchWorkspaceManifest[];
     try {
-      manifests = await this.list(hostId, true);
+      ({ manifests, scratch } = await this.read(hostId, true));
     } catch (error) {
       logger.warn('Could not read SSH workspace manifests', {
         hostId,
@@ -696,7 +771,7 @@ export class SshWorkspaceSync {
       }
     }
     this.publishChanges(onHost);
-    return manifests;
+    return { manifests, scratch };
   }
 
   /** Whether a manifest on the host lacks this installation's last write, or has changes to merge. */
@@ -998,13 +1073,24 @@ export class SshWorkspaceSync {
 
   /** Reads the valid manifests on a host. */
   private async list(hostId: string, background = false): Promise<SshWorkspaceManifest[]> {
+    return (await this.read(hostId, background)).manifests;
+  }
+
+  /** The host's manifests, with those of Scratch workspaces automations started there apart. */
+  private async read(
+    hostId: string,
+    background = false
+  ): Promise<{ manifests: SshWorkspaceManifest[]; scratch: SshScratchWorkspaceManifest[] }> {
     const manifests: SshWorkspaceManifest[] = [];
+    const scratch: SshScratchWorkspaceManifest[] = [];
     for (const text of await this.dependencies.host.read(hostId, { background })) {
       const manifest = parseSshWorkspaceManifest(text);
+      const scratchManifest = manifest ? undefined : parseSshScratchWorkspaceManifest(text);
       if (manifest) manifests.push(manifest);
+      else if (scratchManifest) scratch.push(scratchManifest);
       else logger.warn('Skipping invalid SSH workspace manifest', { hostId });
     }
-    return manifests;
+    return { manifests, scratch };
   }
 
   /**

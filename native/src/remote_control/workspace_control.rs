@@ -14,7 +14,7 @@ use crate::automation::{inside, target_branch};
 use crate::offline_workspace::{
     self, random_uuid, shell_quote, slug, terminal_environment, write_manifest, ManifestLaunch,
     OfflineCaller, OfflineLaunchRequest, SessionLauncher, TerminalSession, WorkspaceSource,
-    SHELL_COMMAND,
+    SCRATCH_DIRECTORY, SHELL_COMMAND,
 };
 
 /// Who wrote a manifest this host changed; any name but the desktop's own makes it merge the change.
@@ -130,6 +130,8 @@ struct Editable {
     /// An object, as `read_manifest` checked.
     manifest: Value,
     directory: PathBuf,
+    /// A Scratch workspace an automation's run started here: a folder, not a repository.
+    scratch: bool,
 }
 
 impl Editable {
@@ -137,14 +139,25 @@ impl Editable {
         let manifest = read_manifest(base, workspace_id)
             .filter(Value::is_object)
             .context("This workspace is not on this host.")?;
+        let scratch = manifest["backend"]["scratch"] == true;
+        let scratch_root = base.join(SCRATCH_DIRECTORY);
         let directory = manifest["backend"]["remoteDirectory"]
             .as_str()
             .map(PathBuf::from)
-            .filter(|directory| inside(directory, &base.join("worktrees")) && directory.is_dir())
+            .filter(|directory| {
+                let in_place = if scratch {
+                    directory.parent() == Some(scratch_root.as_path())
+                        && inside(directory, &scratch_root)
+                } else {
+                    inside(directory, &base.join("worktrees"))
+                };
+                in_place && directory.is_dir()
+            })
             .context("This workspace's folder is missing on this host.")?;
         Ok(Self {
             manifest,
             directory,
+            scratch,
         })
     }
 
@@ -183,7 +196,8 @@ impl Editable {
                 workspace_id,
                 terminal_id,
                 &self.directory,
-                &self.base_branch(),
+                // A scratch folder isn't a repository, so it has no branch to target.
+                (!self.scratch).then(|| self.base_branch()).as_deref(),
             ),
             command,
             installation_key: caller.installation_key.clone(),
@@ -553,6 +567,31 @@ mod tests {
         assert!(start(&caller, "ws-1", &mut launcher, 2).is_err());
 
         assert_eq!(manifest(&caller, "ws-1"), before);
+    }
+
+    #[test]
+    fn starts_a_scratch_run_again_in_its_folder_with_no_target_branch() {
+        let (_temp, caller) = host();
+        let folder = caller.base.join("scratch/daily-summary-20261015-0900");
+        fs::create_dir_all(&folder).unwrap();
+        let mut written = manifest(&caller, "ws-1");
+        written["backend"] = json!({ "remoteDirectory": folder, "scratch": true });
+        write_manifest(&caller.base, "ws-1", &written).unwrap();
+        let mut launcher = RecordingLauncher::new();
+
+        start(&caller, "ws-1", &mut launcher, 9_000).unwrap();
+
+        let session = &launcher.started[0];
+        assert_eq!(session.directory, folder);
+        assert!(!session
+            .environment
+            .iter()
+            .any(|(name, _)| name == "KOMLA_TARGET_BRANCH"));
+
+        // Only a folder directly in the scratch folder.
+        written["backend"]["remoteDirectory"] = json!(caller.base.join("scratch"));
+        write_manifest(&caller.base, "ws-1", &written).unwrap();
+        assert!(start(&caller, "ws-1", &mut launcher, 9_100).is_err());
     }
 
     #[test]

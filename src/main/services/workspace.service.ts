@@ -210,6 +210,8 @@ class WorkspaceService {
         },
         add: (hostId, manifest, placement) =>
           this.adoption.addAdoptedSshWorkspace(hostId, manifest, placement),
+        addScratch: (hostId, manifest) =>
+          this.adoption.addAdoptedSshScratchWorkspace(hostId, manifest),
         deleteHere: (workspaceId) =>
           this.lifecycle.delete(workspaceId, true, false, { skipBackendCleanup: true }),
         hostSynced: (hostId) => {

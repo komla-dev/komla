@@ -62,7 +62,11 @@ import { buildOpenCodeNotifyPlugin } from './opencode-settings.service';
 import { getKomlaBasePath } from './paths';
 import { sshConnectionService } from './ssh-connection.service';
 import { sshHostService } from './ssh-host.service';
-import { SSH_SCRATCH_DIRECTORY, sshWorkspaceBasePath } from './ssh-workspace-base-path';
+import {
+  isRemoteScratchFolder,
+  SSH_SCRATCH_DIRECTORY,
+  sshWorkspaceBasePath,
+} from './ssh-workspace-base-path';
 import {
   hookJournalFolder,
   parseHookJournalEntry,
@@ -375,17 +379,7 @@ function preferFresherTargetLines(
   ];
 }
 
-/** Whether `folder` is a folder directly in the scratch folder under the host's `basePath`. */
-export function isRemoteScratchFolder(basePath: string, folder: string): boolean {
-  const name = pathPosix.basename(folder);
-  return (
-    pathPosix.normalize(folder) === folder &&
-    pathPosix.dirname(folder) === joinRemote(basePath, SSH_SCRATCH_DIRECTORY) &&
-    name !== '' &&
-    name !== '.' &&
-    name !== '..'
-  );
-}
+export { isRemoteScratchFolder };
 
 /** A lookup of a host's workspace base path, and the path once it's found. */
 type BasePathResolution = { connectionKey: string; promise: Promise<string>; resolved?: string };

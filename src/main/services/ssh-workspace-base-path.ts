@@ -13,3 +13,15 @@ export function sshWorkspaceBasePath(backend: SshWorkspaceBackend): string {
   const parent = backend.scratch ? backend.remoteDirectory : backend.remoteProjectRoot;
   return pathPosix.dirname(pathPosix.dirname(parent));
 }
+
+/** Whether `folder` is a folder directly in the scratch folder under the host's `basePath`. */
+export function isRemoteScratchFolder(basePath: string, folder: string): boolean {
+  const name = pathPosix.basename(folder);
+  return (
+    pathPosix.normalize(folder) === folder &&
+    pathPosix.dirname(folder) === pathPosix.join(basePath, SSH_SCRATCH_DIRECTORY) &&
+    name !== '' &&
+    name !== '.' &&
+    name !== '..'
+  );
+}

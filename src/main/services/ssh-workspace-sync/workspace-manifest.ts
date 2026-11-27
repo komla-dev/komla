@@ -19,6 +19,7 @@ import {
 } from './terminal-layout';
 
 import type {
+  SshScratchWorkspaceManifest,
   SshWorkspaceLaunch,
   SshWorkspaceManifest,
 } from '../../../shared/types/ssh-workspace-manifest';
@@ -398,5 +399,42 @@ export function parseSshWorkspaceManifest(text: string): SshWorkspaceManifest | 
 /** Returns `value` if it is a valid manifest, e.g. one parsed from a host's file or saved locally. */
 export function validSshWorkspaceManifest(value: unknown): SshWorkspaceManifest | undefined {
   const parsed = manifestSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+const scratchManifestSchema = z.object({
+  schema: z.literal(1),
+  workspaceId: z.string().regex(WORKSPACE_ID_PATTERN),
+  name: z.string().max(4096),
+  customName: optionalString,
+  customDescription: optionalString,
+  backend: z.object({ remoteDirectory: z.string().min(1).max(4096), scratch: z.literal(true) }),
+  terminals: z
+    .array(
+      z.object({
+        id: z.string().regex(WORKSPACE_ID_PATTERN),
+        name: z.string().max(4096),
+        createdAt: z.number().finite(),
+      })
+    )
+    .max(256),
+  primaryTerminalId: optionalString,
+  createdAt: z.number().finite(),
+  updatedAt: z.number().finite(),
+  launch: manifestSchema.shape.launch,
+  adoptOnConnect: z.literal(true),
+});
+
+/** Reads the manifest of a Scratch workspace an automation's run started on its host. */
+export function parseSshScratchWorkspaceManifest(
+  text: string
+): SshScratchWorkspaceManifest | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const parsed = scratchManifestSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }

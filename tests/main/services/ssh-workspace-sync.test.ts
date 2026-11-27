@@ -17,7 +17,10 @@ import {
 } from '../../../src/main/services/ssh-workspace-sync/workspace-manifest';
 
 import type { Terminal, Workspace } from '../../../src/shared/types';
-import type { SshWorkspaceManifest } from '../../../src/shared/types/ssh-workspace-manifest';
+import type {
+  SshScratchWorkspaceManifest,
+  SshWorkspaceManifest,
+} from '../../../src/shared/types/ssh-workspace-manifest';
 import type { WorkspaceStatus } from '../../../src/shared/types/workspace';
 
 vi.mock('../../../src/main/lib/logger', () => ({
@@ -97,6 +100,22 @@ function memoryStore(workspaces: Map<string, Workspace>) {
         return workspace;
       }
     ),
+    addScratch: vi.fn((hostId: string, manifest: SshScratchWorkspaceManifest) => {
+      const workspace = {
+        id: manifest.workspaceId,
+        name: manifest.name,
+        customName: manifest.customName,
+        workingDirectory: `ssh://${hostId}${manifest.backend.remoteDirectory}`,
+        backend: { kind: 'ssh', hostId, ...manifest.backend },
+        scratch: true,
+        isWorktree: false,
+        projectId: null,
+        terminals: manifest.terminals.map((entry) => terminal(entry.id, { name: entry.name })),
+        status: 'active',
+      } as Workspace;
+      workspaces.set(workspace.id, workspace);
+      return workspace;
+    }),
     deleteHere: vi.fn(async (workspaceId: string) => {
       workspaces.delete(workspaceId);
     }),
@@ -147,6 +166,8 @@ function service(
   const read = vi.fn(async (): Promise<string[]> => []);
   const findTerminalSessions = vi.fn(async (): Promise<Set<string>> => new Set());
   const removeOrphaned = vi.fn(async () => undefined);
+  const removeManifest = vi.fn(async () => undefined);
+  const claimManifest = vi.fn(async () => true);
   const hasHost = vi.fn(() => true);
   const readyHosts = vi.fn(() => ['host-a']);
   const disconnected = vi.fn((_hostId: string) => false);
@@ -164,6 +185,8 @@ function service(
     read,
     findTerminalSessions,
     removeOrphaned,
+    removeManifest,
+    claimManifest,
     hasHost,
     readyHosts,
     disconnected,
@@ -184,6 +207,8 @@ function service(
         read,
         findTerminalSessions,
         removeOrphaned,
+        removeManifest,
+        claimManifest,
         hasHost,
         readyHosts,
         disconnected,
@@ -1136,8 +1161,15 @@ describe('SshWorkspaceSync', () => {
 
   it('checks again on a workspace whose files were missing', async () => {
     const { manifests, inspect, store, hold } = service();
-    const deleted = sshWorkspace({ provisionErrorReason: 'missing-from-host', provisionError: 'gone' });
-    const back = sshWorkspace({ id: 'ws-50', provisionErrorReason: 'missing-from-host', provisionError: 'gone' });
+    const deleted = sshWorkspace({
+      provisionErrorReason: 'missing-from-host',
+      provisionError: 'gone',
+    });
+    const back = sshWorkspace({
+      id: 'ws-50',
+      provisionErrorReason: 'missing-from-host',
+      provisionError: 'gone',
+    });
     inspect.mockImplementation(async (_backend, workspaceId) =>
       workspaceId === 'ws-42' ? { state: 'deleted' } : { state: 'present' }
     );
@@ -1152,7 +1184,10 @@ describe('SshWorkspaceSync', () => {
 
   it('does not count files another workspace now uses as found again', async () => {
     const { manifests, inspect, read, store, hold } = service();
-    const missing = sshWorkspace({ provisionErrorReason: 'missing-from-host', provisionError: 'gone' });
+    const missing = sshWorkspace({
+      provisionErrorReason: 'missing-from-host',
+      provisionError: 'gone',
+    });
     // Created later on the same branch, in the directory the missing one had.
     read.mockResolvedValue([fromOtherDevice(sshWorkspace({ id: 'ws-50' }))]);
     inspect.mockResolvedValue({ state: 'present' });
@@ -1869,5 +1904,149 @@ describe('SshWorkspaceSync scheduling', () => {
     expect(JSON.parse(write.mock.calls[0]![2] as string)).toMatchObject({
       name: 'Renamed while away',
     });
+  });
+});
+
+describe('Scratch workspaces automations start on an SSH host', () => {
+  const runManifest = (overrides: Partial<SshScratchWorkspaceManifest> = {}) =>
+    JSON.stringify({
+      schema: 1,
+      workspaceId: 'ws-run',
+      name: 'Daily summary',
+      customName: 'Daily summary',
+      customDescription: 'Scheduled run · 2026-10-15 09:00 Europe/Oslo',
+      backend: {
+        remoteDirectory: '/home/dev/.komla/scratch/daily-summary-20261015-0900',
+        scratch: true,
+      },
+      terminals: [{ id: 'agent-1', name: 'Codex', createdAt: 5 }],
+      primaryTerminalId: 'agent-1',
+      createdAt: 5,
+      updatedAt: 5,
+      launch: { agentName: 'Codex', promptCommand: 'codex {{prompt}}', openCommand: 'codex' },
+      adoptOnConnect: true,
+      ...overrides,
+    });
+
+  it.each([true, false])(
+    'adds one here and removes its manifest, so no other installation adds it (sync %s)',
+    async (syncs) => {
+      const { manifests, read, syncsWith, store, claimManifest } = service();
+      syncsWith.mockReturnValue(syncs);
+      read.mockResolvedValue([runManifest()]);
+
+      await manifests.syncSoon('host-a', { now: true });
+      await flush();
+
+      expect(store.addScratch).toHaveBeenCalledTimes(1);
+      expect(store.get('ws-run')).toMatchObject({
+        scratch: true,
+        projectId: null,
+        backend: {
+          kind: 'ssh',
+          hostId: 'host-a',
+          remoteDirectory: '/home/dev/.komla/scratch/daily-summary-20261015-0900',
+          scratch: true,
+        },
+      });
+      expect(store.add).not.toHaveBeenCalled();
+      expect(claimManifest).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: 'host-a', scratch: true }),
+        'ws-run'
+      );
+    }
+  );
+
+  it('leaves one to the installation that claimed its manifest first', async () => {
+    const { manifests, read, store, claimManifest } = service();
+    claimManifest.mockResolvedValue(false);
+    read.mockResolvedValue([runManifest()]);
+
+    await manifests.syncSoon('host-a', { now: true });
+    await flush();
+
+    expect(store.addScratch).not.toHaveBeenCalled();
+  });
+
+  it('removes the manifest of one whose folder is already a workspace here', async () => {
+    const { manifests, read, store, hold, removeManifest } = service();
+    hold(
+      sshWorkspace({
+        id: 'ws-other',
+        backend: {
+          kind: 'ssh',
+          hostId: 'host-a',
+          remoteDirectory: '/home/dev/.komla/scratch/daily-summary-20261015-0900',
+          scratch: true,
+        },
+      })
+    );
+    read.mockResolvedValue([runManifest()]);
+
+    await manifests.syncSoon('host-a', { now: true });
+    await flush();
+
+    expect(store.addScratch).not.toHaveBeenCalled();
+    expect(removeManifest).toHaveBeenCalledWith(
+      expect.objectContaining({ scratch: true }),
+      'ws-run'
+    );
+  });
+
+  it('removes the manifest again of one already here, without adding it twice', async () => {
+    const { manifests, read, store, removeManifest } = service();
+    read.mockResolvedValue([runManifest()]);
+    await manifests.syncSoon('host-a', { now: true });
+    await flush();
+
+    await manifests.syncSoon('host-a', { now: true });
+    await flush();
+
+    expect(store.addScratch).toHaveBeenCalledTimes(1);
+    expect(removeManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a folder outside the host’s scratch folder', async () => {
+    const { manifests, read, store, removeManifest, claimManifest, inspect } = service();
+    read.mockResolvedValue([
+      runManifest({ backend: { remoteDirectory: '/home/dev/projects/secret', scratch: true } }),
+      runManifest({
+        workspaceId: 'ws-escape',
+        backend: { remoteDirectory: '/home/dev/.komla/scratch/../repos', scratch: true },
+      }),
+    ]);
+
+    await manifests.syncSoon('host-a', { now: true });
+    await flush();
+
+    expect(store.addScratch).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+    expect(removeManifest).not.toHaveBeenCalled();
+    expect(claimManifest).not.toHaveBeenCalled();
+  });
+
+  it('drops the manifest of one whose folder is gone, without adding it', async () => {
+    const { manifests, read, store, inspect, removeOrphaned } = service();
+    inspect.mockResolvedValue({ state: 'missing' });
+    read.mockResolvedValue([runManifest()]);
+
+    await manifests.syncSoon('host-a', { now: true });
+    await flush();
+
+    expect(store.addScratch).not.toHaveBeenCalled();
+    expect(removeOrphaned).toHaveBeenCalledWith(
+      expect.objectContaining({ scratch: true }),
+      'ws-run'
+    );
+  });
+
+  it('leaves one without adoptOnConnect, which isn’t an automation’s run', async () => {
+    const { manifests, read, store } = service();
+    read.mockResolvedValue([runManifest({ adoptOnConnect: undefined as unknown as true })]);
+
+    await manifests.syncSoon('host-a', { now: true });
+    await flush();
+
+    expect(store.addScratch).not.toHaveBeenCalled();
   });
 });
