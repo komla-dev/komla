@@ -427,4 +427,111 @@ describe('gitDiffService changed files', () => {
       expect(diff.status).toBe('untracked');
     }
   );
+
+  describe('since the target branch', () => {
+    const sinceMain = {
+      local: async () => (await gitDiff()).getWorkingTreeDiffAgainstBranch(repoPath, 'main', true),
+      SSH: async () => {
+        const { sshWorkspaceDiff } =
+          await import('../../../../src/main/services/workspace-git/ssh-diff');
+        return sshWorkspaceDiff.getWorkingTreeDiffAgainstBranch(sshWorkspace(), 'main', true);
+      },
+    };
+    const fileSinceMain = {
+      local: async (filePath: string) => {
+        const service = await gitDiff();
+        await service.getWorkingTreeDiffAgainstBranch(repoPath, 'main', true);
+        return service.getFullFileDiffAgainstBranch(repoPath, filePath, 'main', true);
+      },
+      SSH: async (filePath: string) => {
+        const { sshWorkspaceDiff } =
+          await import('../../../../src/main/services/workspace-git/ssh-diff');
+        await sshWorkspaceDiff.getWorkingTreeDiffAgainstBranch(sshWorkspace(), 'main', true);
+        return sshWorkspaceDiff.getFullFileDiffAgainstBranch(
+          sshWorkspace(),
+          filePath,
+          'main',
+          true
+        );
+      },
+    };
+    const head = async () => (await git('rev-parse', 'HEAD')).stdout.trim();
+
+    // A fetch moved origin/main past the local main, and the branch started from origin/main.
+    const branchFromFetchedMain = async () => {
+      writeFileSync(join(repoPath, 'base.txt'), 'base\n');
+      await commitAll();
+      await git('checkout', '-q', '-b', 'feature');
+      writeFileSync(join(repoPath, 'upstream.txt'), 'upstream\n');
+      await commitAll();
+      await git('update-ref', 'refs/remotes/origin/main', await head());
+      writeFileSync(join(repoPath, 'mine.txt'), 'mine\n');
+      await commitAll();
+    };
+
+    it.each(Object.keys(sinceMain))(
+      '%s leaves out commits a fetch brought to origin before the local target has them',
+      async (location) => {
+        await branchFromFetchedMain();
+
+        const { files } = await sinceMain[location as keyof typeof sinceMain]();
+
+        expect(files.map((file) => file.path)).toEqual(['mine.txt']);
+      }
+    );
+
+    it.each(Object.keys(fileSinceMain))(
+      "%s diffs a file against the fetched target's content",
+      async (location) => {
+        await branchFromFetchedMain();
+
+        const diff = await fileSinceMain[location as keyof typeof fileSinceMain]('upstream.txt');
+
+        expect(diff.oldContent).toBe('upstream\n');
+        expect(diff.newContent).toBe('upstream\n');
+      }
+    );
+
+    it.each(Object.keys(sinceMain))(
+      "%s reads origin's ref past a local branch named origin/main",
+      async (location) => {
+        await branchFromFetchedMain();
+        await git('branch', 'origin/main', 'main');
+
+        const { files } = await sinceMain[location as keyof typeof sinceMain]();
+
+        expect(files.map((file) => file.path)).toEqual(['mine.txt']);
+      }
+    );
+
+    it.each(Object.keys(sinceMain))(
+      "%s compares against origin's target when there is no local one",
+      async (location) => {
+        await branchFromFetchedMain();
+        await git('branch', '-D', 'main');
+
+        const { files } = await sinceMain[location as keyof typeof sinceMain]();
+
+        expect(files.map((file) => file.path)).toEqual(['mine.txt']);
+      }
+    );
+
+    it.each(Object.keys(sinceMain))(
+      '%s keeps comparing against a local target that has commits origin lacks',
+      async (location) => {
+        writeFileSync(join(repoPath, 'base.txt'), 'base\n');
+        await commitAll();
+        await git('update-ref', 'refs/remotes/origin/main', await head());
+        writeFileSync(join(repoPath, 'unpushed.txt'), 'unpushed\n');
+        await commitAll();
+        await git('checkout', '-q', '-b', 'feature');
+        writeFileSync(join(repoPath, 'mine.txt'), 'mine\n');
+        await commitAll();
+
+        const { files } = await sinceMain[location as keyof typeof sinceMain]();
+
+        expect(files.map((file) => file.path)).toEqual(['mine.txt']);
+      }
+    );
+  });
 });

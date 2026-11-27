@@ -70,12 +70,34 @@ async function resolveDiffTarget(
   useMergeBase: boolean
 ): Promise<string> {
   if (!useMergeBase) return branch;
+  const base = await freshestTargetRef(worktreePath, branch);
   try {
-    const mergeBase = await gitExec.execGitAsync(worktreePath, ['merge-base', branch, 'HEAD']);
+    const mergeBase = await gitExec.execGitAsync(worktreePath, ['merge-base', base, 'HEAD']);
     return mergeBase.trim();
   } catch {
-    return branch;
+    return base;
   }
+}
+
+/**
+ * Origin's copy of the branch when a fetch left the local branch behind it with nothing of its
+ * own, as Branch Status counts commits ahead, so commits already upstream aren't the branch's
+ * changes. A local branch with commits origin lacks stays the comparison point. The full ref,
+ * since a local branch or tag named `origin/<branch>` would win the short name.
+ */
+async function freshestTargetRef(worktreePath: string, branch: string): Promise<string> {
+  const remote = `refs/remotes/origin/${branch}`;
+  const succeeds = (args: string[]) =>
+    gitExec.execGitAsync(worktreePath, args).then(
+      () => true,
+      () => false
+    );
+  // The usual case, a local branch behind origin's or level with it, answers in one call.
+  if (await succeeds(['merge-base', '--is-ancestor', branch, remote])) return remote;
+  if (await succeeds(['rev-parse', '--verify', '--quiet', `${branch}^{commit}`])) return branch;
+  return (await succeeds(['rev-parse', '--verify', '--quiet', `${remote}^{commit}`]))
+    ? remote
+    : branch;
 }
 
 /**

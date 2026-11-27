@@ -85,6 +85,21 @@ function summarize(files: FileChange[]): WorktreeDiff['summary'] {
   );
 }
 
+/**
+ * Points `$<variable>` at origin's copy of `$branch` when a fetch left the local one behind it
+ * with nothing of its own, as the local comparison does (`freshestTargetRef` in git-diff.ts).
+ */
+function pointAtFreshestTargetRef(variable: string): string {
+  return [
+    'remote_ref="refs/remotes/origin/$branch"',
+    'if git merge-base --is-ancestor "$branch" "$remote_ref" 2>/dev/null ||',
+    `  { ! git rev-parse --verify --quiet "$branch^{commit}" >/dev/null 2>&1 &&`,
+    `    git rev-parse --verify --quiet "$remote_ref^{commit}" >/dev/null 2>&1; }; then`,
+    `  ${variable}="$remote_ref"`,
+    'fi',
+  ].join('\n');
+}
+
 function remoteBase64Function(): string {
   return [
     'komla_b64() {',
@@ -212,6 +227,7 @@ class SshWorkspaceDiff {
         '  target="origin/$branch"',
         'fi',
         'if [ "$use_merge_base" = "1" ]; then',
+        `  ${pointAtFreshestTargetRef('target')}`,
         '  target=$(git merge-base "$target" HEAD 2>/dev/null || printf "%s" "$target")',
         'fi',
         remoteBase64Function(),
@@ -375,7 +391,10 @@ class SshWorkspaceDiff {
             '  ref="origin/$branch"',
             'fi',
             ...(ref.useMergeBase
-              ? ['ref=$(git merge-base "$ref" HEAD 2>/dev/null || printf "%s" "$ref")']
+              ? [
+                  pointAtFreshestTargetRef('ref'),
+                  'ref=$(git merge-base "$ref" HEAD 2>/dev/null || printf "%s" "$ref")',
+                ]
               : []),
           ];
     const output = await this.run(
