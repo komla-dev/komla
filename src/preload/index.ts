@@ -111,7 +111,11 @@ import type {
   LocalCopySyncStatus,
 } from '../shared/types';
 import type { AgentSkill, AgentSkillFamily, AgentSkillPlace } from '../shared/types/agent-skill';
-import type { AgentTokenSummary } from '../shared/types/agent-token';
+import type {
+  AgentTokenCreated,
+  AgentTokenCreateRequest,
+  AgentTokenSummary,
+} from '../shared/types/agent-token';
 import type { AgentUsage, AgentUsageSource } from '../shared/types/agent-usage';
 import type {
   Automation,
@@ -2887,6 +2891,8 @@ const api = {
   agentTokensList: (): Promise<AgentTokenSummary[]> => ipcRenderer.invoke(IPC.AGENT_TOKENS_LIST),
   agentTokensRevoke: (id: string): Promise<void> =>
     ipcRenderer.invoke(IPC.AGENT_TOKENS_REVOKE, { id }),
+  agentTokensCreate: (request: AgentTokenCreateRequest): Promise<AgentTokenCreated> =>
+    ipcRenderer.invoke(IPC.AGENT_TOKENS_CREATE, request),
   onAgentTokensChanged: (callback: (tokens: AgentTokenSummary[]) => void): (() => void) => {
     const handler = (_: Electron.IpcRendererEvent, tokens: AgentTokenSummary[]): void => {
       callback(tokens);

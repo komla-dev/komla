@@ -677,7 +677,11 @@ export function RemoteTab() {
         )}
       </SettingsCard>
 
-      <RemoteAgentTokensCard mcpUrl={server ? `${server.httpOrigin}/remote/mcp` : null} />
+      <RemoteAgentTokensCard
+        mcpUrl={server ? `${server.httpOrigin}/remote/mcp` : null}
+        remoteOn={Boolean(server) || retrying}
+        localAccess={localAccess}
+      />
 
       {tailscaleInstalled && !needsSignIn && (
         <div className={cn(SETTINGS_CARD_CLASS, 'px-5 py-4')}>

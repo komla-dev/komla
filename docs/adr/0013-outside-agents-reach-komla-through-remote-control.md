@@ -52,6 +52,15 @@ route is only another adapter.
   their scope and when each was last used. Removing one ends it at once. Removing the passkey that
   approved a token, or turning remote control off, revokes it too. Later, a workspace an outside
   agent launches can record which token launched it.
+- **The desktop approves tokens too** (amended 2026-11). Settings › Remote's Agent access offers the
+  same form, and the desktop approves through the same service and checks, since it is Komla
+  itself and needs no passkey. "SSH hosts and this computer" is offered only while "Allow access
+  to this computer" is on. The desktop shows the token once and still stores only its hash. Such a
+  token belongs to the desktop, not a passkey: removing passkeys leaves it, while revoking it,
+  expiry and turning remote control off end it as they end the rest. Each stored token records
+  which approved it, a passkey by its credential id or the desktop, rather than borrowing a passkey
+  id. A passkey's token is stored as before, so a Komla from before this change still reads it; such
+  a build drops the desktop's tokens.
 - **The desktop first.** The route runs on the desktop, so it is unavailable while the desktop is
   asleep. The host's phone server (ADR 0005) can already create workspaces without a desktop. It
   could later serve the same route, with token hashes and scopes copied to `trust.json` under its

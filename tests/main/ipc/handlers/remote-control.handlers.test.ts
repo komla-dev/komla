@@ -79,6 +79,10 @@ vi.mock('../../../../src/main/services/remote-control-host-access.service', () =
 
 const mockAgentTokenService = vi.hoisted(() => ({
   list: vi.fn(() => []),
+  create: vi.fn(() => ({
+    token: `komla_agent_${'A'.repeat(43)}`,
+    summary: { id: 'tok-1', label: 'Desk bot', projectIds: ['web'], sshOnly: true },
+  })),
   revoke: vi.fn(() => true),
   revokeAll: vi.fn(),
   onChange: vi.fn(() => () => {}),
@@ -217,9 +221,9 @@ describe('registerRemoteControlHandlers', () => {
 
     registerRemoteControlHandlers();
 
-    // Eight direct remote-control, two SSH host access, three paired-device and two agent token
+    // Eight direct remote-control, two SSH host access, three paired-device and three agent token
     // handlers.
-    expect(ipcMain.handle).toHaveBeenCalledTimes(15);
+    expect(ipcMain.handle).toHaveBeenCalledTimes(16);
     expect(ipcMain._getHandler('remote-control:enable')).toBeUndefined();
     expect(ipcMain._getHandler('remote-control:get-state')).toBeUndefined();
     expect(ipcMain._getHandler('remote-control:disconnect-active')).toBeDefined();
@@ -237,6 +241,58 @@ describe('registerRemoteControlHandlers', () => {
     expect(ipcMain._getHandler('paired-devices:remove')).toBeDefined();
     expect(ipcMain._getHandler('agent-tokens:list')).toBeDefined();
     expect(ipcMain._getHandler('agent-tokens:revoke')).toBeDefined();
+    expect(ipcMain._getHandler('agent-tokens:create')).toBeDefined();
+  });
+
+  it('makes an Agent Token the desktop approved, while remote control is on', async () => {
+    mockConfigService.get.mockReturnValue({
+      directRemotePort: 52864,
+      directRemotePublicOrigin: undefined,
+      directRemoteEnabled: true,
+    } as never);
+    const { registerRemoteControlHandlers, ipcMain } = await setup();
+    registerRemoteControlHandlers();
+
+    await expect(
+      ipcMain._invoke('agent-tokens:create', {
+        label: 'Desk bot',
+        projectIds: ['web'],
+        lifetimeDays: null,
+        sshOnly: false,
+      })
+    ).resolves.toMatchObject({ token: `komla_agent_${'A'.repeat(43)}` });
+    expect(mockAgentTokenService.create).toHaveBeenCalledWith({
+      label: 'Desk bot',
+      projectIds: ['web'],
+      lifetimeDays: null,
+      sshOnly: false,
+      approvedBy: { kind: 'desktop' },
+    });
+  });
+
+  it('refuses to make an Agent Token while remote control is off, or from a malformed request', async () => {
+    const { registerRemoteControlHandlers, ipcMain } = await setup();
+    registerRemoteControlHandlers();
+    const request = { label: 'Desk bot', projectIds: ['web'], lifetimeDays: 30, sshOnly: true };
+
+    await expect(ipcMain._invoke('agent-tokens:create', request)).rejects.toThrow(
+      /Turn on remote control/
+    );
+
+    mockConfigService.get.mockReturnValue({
+      directRemotePort: 52864,
+      directRemotePublicOrigin: undefined,
+      directRemoteEnabled: true,
+    } as never);
+    for (const bad of [
+      { ...request, lifetimeDays: 365 },
+      { ...request, projectIds: 'web' },
+      { ...request, credentialId: 'passkey-1' },
+      { ...request, sshOnly: undefined },
+    ]) {
+      await expect(ipcMain._invoke('agent-tokens:create', bad)).rejects.toThrow();
+    }
+    expect(mockAgentTokenService.create).not.toHaveBeenCalled();
   });
 
   it('lists and revokes agent tokens, and ends them all when remote control turns off', async () => {

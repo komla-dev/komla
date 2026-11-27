@@ -719,9 +719,10 @@ Set or update the title for an existing Komla workspace by matching the agent's 
 An agent that runs outside Komla's terminals, such as a chat bot on another machine on your
 tailnet, calls MCP on remote control's server instead, at `https://<computer>.<tailnet>.ts.net/remote/mcp`
 (Settings › Remote copies the address), with an Agent Token as
-`Authorization: Bearer komla_agent_…`. Approve one in the remote control page's Settings, under
-Agent access: name the agent, pick its projects, where it may work (SSH hosts only, unless you
-let it reach this computer too) and how long it works, up to never expiring. See
+`Authorization: Bearer komla_agent_…`. Approve one under Agent access, in the desktop's
+Settings › Remote or in the remote control page's Settings: name the agent, pick its projects,
+where it may work (SSH hosts only, unless you let it reach this computer too) and how long it
+works, up to never expiring. See
 [ADR 0013](adr/0013-outside-agents-reach-komla-through-remote-control.md).
 
 | Tool               | What it does                                                                                                                 |

@@ -1032,16 +1032,13 @@ class RemoteControlAppSession implements RemoteControlSession {
       return;
     }
     if (frame.type === 'app:agent-token:create') {
-      const known = new Set(this.deps.projects.list().map((project) => project.id));
-      const unknown = frame.projectIds.find((id) => !known.has(id));
       try {
-        if (unknown) throw new Error('One of those projects no longer exists.');
         const { token, summary } = this.deps.agentTokens.create({
           label: frame.label,
           projectIds: frame.projectIds,
           lifetimeDays: frame.lifetimeDays,
           sshOnly: frame.sshOnly,
-          credentialId: this.device.credentialId,
+          approvedBy: { kind: 'passkey', credentialId: this.device.credentialId },
         });
         await this.peer.sendEncryptedJson({
           type: 'app:agent-token:created',

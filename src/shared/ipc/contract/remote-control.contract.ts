@@ -6,11 +6,12 @@ import {
   pairedDevicesRenameArgsSchema,
   pairedDevicesRemoveArgsSchema,
   agentTokensRevokeArgsSchema,
+  agentTokensCreateArgsSchema,
 } from '../schemas/remote-control-ipc.schemas';
 
 import { invoke } from './define';
 
-import type { AgentTokenSummary } from '../../types/agent-token';
+import type { AgentTokenCreated, AgentTokenSummary } from '../../types/agent-token';
 import type { PairedDeviceRecord } from '../../types/paired-device';
 import type {
   RemoteControlDirectPairingOffer,
@@ -48,4 +49,5 @@ export const remoteControlContract = {
   [IPC.PAIRED_DEVICES_REMOVE]: invoke(pairedDevicesRemoveArgsSchema).returns<void>(),
   [IPC.AGENT_TOKENS_LIST]: invoke().returns<AgentTokenSummary[]>(),
   [IPC.AGENT_TOKENS_REVOKE]: invoke(agentTokensRevokeArgsSchema).returns<void>(),
+  [IPC.AGENT_TOKENS_CREATE]: invoke(agentTokensCreateArgsSchema).returns<AgentTokenCreated>(),
 } as const;

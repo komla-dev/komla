@@ -26,7 +26,7 @@ import {
 import { windowService } from '../../services/window.service';
 import { handleIpc } from '../validation/ipc-validators';
 
-import type { AgentTokenSummary } from '../../../shared/types/agent-token';
+import type { AgentTokenCreated, AgentTokenSummary } from '../../../shared/types/agent-token';
 import type { PairedDeviceRecord } from '../../../shared/types/paired-device';
 import type {
   RemoteControlDirectPairingOffer,
@@ -234,6 +234,15 @@ export function registerRemoteControlHandlers(): void {
 
   handleIpc(IPC.AGENT_TOKENS_REVOKE, async (_evt, [{ id }]): Promise<void> => {
     agentTokenService.revoke(id);
+  });
+
+  // The desktop is Komla itself, so it approves a token with no passkey. The token belongs to the
+  // desktop: removing a passkey leaves it, and turning remote control off ends it like the rest.
+  handleIpc(IPC.AGENT_TOKENS_CREATE, async (_evt, [request]): Promise<AgentTokenCreated> => {
+    if (!configService.get().directRemoteEnabled) {
+      throw new Error('Turn on remote control to give an agent access.');
+    }
+    return agentTokenService.create({ ...request, approvedBy: { kind: 'desktop' } });
   });
 
   agentTokenService.onChange((tokens) => {

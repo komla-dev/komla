@@ -101,15 +101,18 @@ describe('remote control session agent token frames', () => {
       projectIds: ['web'],
       lifetimeDays: 30,
       sshOnly: false,
-      credentialId: 'cred-phone',
+      approvedBy: { kind: 'passkey', credentialId: 'cred-phone' },
     });
     expect(peer.sent).toEqual([
       { type: 'app:agent-token:created', requestId: 'r1', token: TOKEN, summary },
     ]);
   });
 
-  it('refuses a project the desktop does not have', async () => {
+  it('tells the page why the desktop refused the token', async () => {
     const { peer, agentTokens } = makeSession();
+    agentTokens.create.mockImplementation(() => {
+      throw new Error('One of those projects no longer exists.');
+    });
 
     await peer.emit({
       type: 'app:agent-token:create',
@@ -119,7 +122,6 @@ describe('remote control session agent token frames', () => {
       lifetimeDays: 30,
     });
 
-    expect(agentTokens.create).not.toHaveBeenCalled();
     expect(peer.sent).toEqual([
       {
         type: 'app:error',

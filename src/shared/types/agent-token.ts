@@ -8,6 +8,21 @@ export type AgentTokenLifetimeDays = (typeof AGENT_TOKEN_LIFETIME_DAYS)[number];
 export const MAX_AGENT_TOKEN_LABEL_CHARS = 64;
 export const MAX_AGENT_TOKENS = 32;
 
+/** What the desktop approves in Settings › Remote. */
+export interface AgentTokenCreateRequest {
+  label: string;
+  projectIds: string[];
+  lifetimeDays: AgentTokenLifetimeDays;
+  /** False only when the user chose to let the Outside Agent reach this computer too. */
+  sshOnly: boolean;
+}
+
+/** A new token, the one time it leaves the desktop, with its summary. */
+export interface AgentTokenCreated {
+  token: string;
+  summary: AgentTokenSummary;
+}
+
 /** An Agent Token as Settings and the phone list it: never the token itself. */
 export interface AgentTokenSummary {
   id: string;

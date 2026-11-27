@@ -651,6 +651,7 @@ export const IPC = {
   // Agent Tokens for Outside Agents (ADR 0013)
   AGENT_TOKENS_LIST: 'agent-tokens:list',
   AGENT_TOKENS_REVOKE: 'agent-tokens:revoke',
+  AGENT_TOKENS_CREATE: 'agent-tokens:create',
 
   // Agent Tokens events (main → renderer)
   AGENT_TOKENS_CHANGED: 'agent-tokens:changed',

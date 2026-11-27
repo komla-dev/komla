@@ -144,6 +144,11 @@ reaches a terminal.
   at SSH hosts only, and a create frame that leaves it out gets that too. The desktop sends it once, over
   the encrypted session, and keeps only its SHA-256 in `remote-agent-tokens.json` (mode 600). The
   session that approves it needs no fresh passkey, since it can already type into every terminal.
+- The desktop approves tokens too, in Settings › Remote under Agent access, with the same choices
+  and the same checks in `agent-token.service.ts`. It is Komla itself, so it needs no passkey, and
+  it shows the token once in that window. "SSH hosts and this computer" is offered there only while
+  "Allow access to this computer" is on. The desktop refuses to make one while remote control is
+  off.
 - A request carries the token as `Authorization: Bearer`. Without a live one it gets `401` and
   runs nothing. A request with an `Origin` header or a `Sec-Fetch-Site` other than `none`, as
   browsers send for pages, gets `403`, so a page on the tailnet can't use a token it doesn't hold
@@ -155,7 +160,9 @@ reaches a terminal.
   computer: folder projects drop out, a launch that would run here is refused, and attention from
   a Local copy terminal is hidden.
 - A token ends when it expires, if it has an expiry, when the user revokes it in Settings › Remote or from a device,
-  when the passkey that approved it is removed, and when remote control is turned off.
+  and when remote control is turned off. A token a device approved also ends when the passkey it
+  signed in with is removed. One the desktop approved belongs to no passkey, so removing passkeys
+  leaves it working; each stored token records which of the two approved it.
 - SSH hosts' phone servers don't serve the route.
 
 ## Transcript and key binding

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -12,6 +12,9 @@ import { MAX_AGENT_TOKENS } from '../../../src/shared/types/agent-token';
 vi.mock('electron', () => mockElectron());
 vi.mock('../../../src/main/services/paired-device-registry.service', () => ({
   pairedDeviceRegistryService: { list: vi.fn(() => []), onChange: vi.fn(() => () => {}) },
+}));
+vi.mock('../../../src/main/services/project.service', () => ({
+  projectService: { list: vi.fn(() => []) },
 }));
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -37,6 +40,7 @@ describe('AgentTokenService', () => {
     return new AgentTokenService({
       path,
       now: () => now,
+      projects: { list: () => [{ id: 'web' }, { id: 'api' }] },
       devices: {
         list: () => devices,
         onChange: (listener) => {
@@ -51,12 +55,22 @@ describe('AgentTokenService', () => {
     tokens: AgentTokenService,
     overrides: Partial<{ credentialId: string; sshOnly: boolean; lifetimeDays: null }> = {}
   ) {
+    const { credentialId = 'passkey-1', ...rest } = overrides;
     return tokens.create({
       label: 'Grok bot',
       projectIds: ['web'],
       lifetimeDays: 30,
-      credentialId: 'passkey-1',
-      ...overrides,
+      approvedBy: { kind: 'passkey', credentialId },
+      ...rest,
+    });
+  }
+
+  function createOnDesktop(tokens: AgentTokenService) {
+    return tokens.create({
+      label: 'Desk bot',
+      projectIds: ['web'],
+      lifetimeDays: 30,
+      approvedBy: { kind: 'desktop' },
     });
   }
 
@@ -159,20 +173,97 @@ describe('AgentTokenService', () => {
     expect(tokens.authenticate(kept.token)).not.toBe(null);
   });
 
+  it('keeps a token the desktop made when a passkey is removed, until it is revoked', () => {
+    const tokens = service();
+    tokens.start();
+    const desk = createOnDesktop(tokens);
+    const phone = create(tokens);
+
+    devices = [];
+    for (const listener of deviceListeners) listener();
+
+    expect(tokens.authenticate(phone.token)).toBe(null);
+    expect(tokens.authenticate(desk.token)).toMatchObject({ id: desk.summary.id });
+    // A fresh service, with no passkeys left, still reads it back.
+    expect(service().authenticate(desk.token)).toMatchObject({ approvedBy: { kind: 'desktop' } });
+
+    expect(tokens.revoke(desk.summary.id)).toBe(true);
+    expect(service().authenticate(desk.token)).toBe(null);
+  });
+
+  it('ends a token the desktop made when remote control turns off', () => {
+    const tokens = service();
+    const desk = createOnDesktop(tokens);
+
+    tokens.revokeAll();
+
+    expect(service().authenticate(desk.token)).toBe(null);
+  });
+
+  it('saves tokens in a file an older Komla still reads its passkey tokens from', () => {
+    const tokens = service();
+    const phone = create(tokens);
+    const desk = createOnDesktop(tokens);
+
+    const saved = JSON.parse(readFileSync(path, 'utf8')) as {
+      version: number;
+      tokens: Array<Record<string, unknown>>;
+    };
+    expect(saved.version).toBe(1);
+    const byId = new Map(saved.tokens.map((record) => [record.id, record]));
+    // A build from before desktop approval keeps a record only with a string credentialId.
+    expect(byId.get(phone.summary.id)).toMatchObject({ credentialId: 'passkey-1' });
+    expect(byId.get(phone.summary.id)).not.toHaveProperty('approvedBy');
+    expect(byId.get(desk.summary.id)).toMatchObject({ approvedBy: 'desktop' });
+    expect(byId.get(desk.summary.id)).not.toHaveProperty('credentialId');
+  });
+
+  it('reads tokens saved before the desktop could make them as passkey tokens', () => {
+    const { token, summary } = create(service());
+    const saved = JSON.parse(readFileSync(path, 'utf8')) as {
+      tokens: Array<Record<string, unknown>>;
+    };
+    // An older build's file, where the passkey's credentialId was the only approver there was.
+    const legacy = saved.tokens.map(({ approvedBy: _approvedBy, ...record }) => ({
+      ...record,
+      credentialId: 'passkey-1',
+    }));
+    writeFileSync(path, JSON.stringify({ version: 1, tokens: legacy }));
+    expect(legacy[0].id).toBe(summary.id);
+
+    const tokens = service();
+    tokens.start();
+    expect(tokens.authenticate(token)).toMatchObject({
+      approvedBy: { kind: 'passkey', credentialId: 'passkey-1' },
+    });
+
+    devices = [{ credentialId: 'passkey-2' }];
+    for (const listener of deviceListeners) listener();
+    expect(tokens.authenticate(token)).toBe(null);
+  });
+
   it('validates what the approval asks for', () => {
     const tokens = service();
     const request = {
       label: 'Bot',
       projectIds: ['web'],
       lifetimeDays: 30 as const,
-      credentialId: 'passkey-1',
+      approvedBy: { kind: 'passkey' as const, credentialId: 'passkey-1' },
     };
 
     expect(() => tokens.create({ ...request, label: '   ' })).toThrow(/Name the agent/);
     expect(() => tokens.create({ ...request, label: 'x'.repeat(65) })).toThrow(/Name the agent/);
     expect(() => tokens.create({ ...request, projectIds: [] })).toThrow(/at least one project/);
     expect(() => tokens.create({ ...request, lifetimeDays: 365 as never })).toThrow(/how long/);
-    expect(() => tokens.create({ ...request, credentialId: 'gone' })).toThrow(/no longer trusted/);
+    expect(() =>
+      tokens.create({ ...request, projectIds: ['web', 'gone'] })
+    ).toThrow(/One of those projects no longer exists/);
+    expect(() =>
+      tokens.create({ ...request, approvedBy: { kind: 'passkey', credentialId: 'gone' } })
+    ).toThrow(/no longer trusted/);
+    expect(() =>
+      tokens.create({ ...request, approvedBy: { kind: 'desktop' }, projectIds: [] })
+    ).toThrow(/at least one project/);
     expect(tokens.create({ ...request, label: '  My\n bot ' }).summary.label).toBe('My bot');
   });
 

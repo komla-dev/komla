@@ -26,7 +26,7 @@ const record: AgentTokenRecord = {
   createdAt: 0,
   expiresAt: Number.MAX_SAFE_INTEGER,
   tokenHash: '0'.repeat(64),
-  credentialId: 'passkey-1',
+  approvedBy: { kind: 'passkey', credentialId: 'passkey-1' },
 };
 
 describe('the Outside Agent MCP route', () => {
