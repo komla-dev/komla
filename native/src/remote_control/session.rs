@@ -151,6 +151,7 @@ fn create_request(frame: &Value) -> Result<CreateRequest, ()> {
         name: non_empty(optional_text(frame, "name", MAX_NAME_CHARS)?),
         branch: non_empty(optional_text(frame, "branchName", MAX_NAME_CHARS)?),
         prompt: non_empty(optional_text(frame, "initialPrompt", MAX_PROMPT_CHARS)?),
+        description: None,
     })
 }
 

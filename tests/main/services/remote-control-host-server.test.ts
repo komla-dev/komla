@@ -2,7 +2,7 @@
 // (`komla __phone-serve`), with a real tmux session, so the two implementations cannot
 // drift apart. ADR 0005.
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'child_process';
-import { generateKeyPairSync, type KeyObject } from 'crypto';
+import { createHash, generateKeyPairSync, type KeyObject } from 'crypto';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { createServer } from 'net';
 import { tmpdir } from 'os';
@@ -22,6 +22,8 @@ import {
   signDeviceProof,
   type DecodedMessage,
 } from '@komla/remote-protocol';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
@@ -33,6 +35,8 @@ const ORIGIN = 'https://mac.tail1.ts.net';
 const RP_ID = 'mac.tail1.ts.net';
 const CREDENTIAL_ID = new TextEncoder().encode('phone-passkey');
 const hasTmux = spawnSync('tmux', ['-V']).status === 0;
+/** An Agent Token the desktop shared with this host, for the project there (ADR 0013). */
+const AGENT_TOKEN = `komla_agent_${'h'.repeat(43)}`;
 
 function base64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64url');
@@ -90,6 +94,14 @@ function trustFile(phones: PhoneDevice[], expiresAt = Date.now() + 60_000): stri
       rpId: RP_ID,
       origin: ORIGIN,
     })),
+    agentTokens: [
+      {
+        id: 'tok-1',
+        tokenHash: createHash('sha256').update(AGENT_TOKEN).digest('hex'),
+        projectIds: ['p-app'],
+        expiresAt: null,
+      },
+    ],
   });
 }
 
@@ -216,6 +228,7 @@ describe.skipIf(process.platform === 'win32' || !hasTmux)('phone server on an SS
   let tmuxSocket: string;
   let server: ChildProcess;
   let url: string;
+  let mcpUrl: string;
   let fingerprint: string;
   let phone: PhoneDevice;
   let signCount = 0;
@@ -381,6 +394,8 @@ describe.skipIf(process.platform === 'win32' || !hasTmux)('phone server on an SS
           ],
         },
       ],
+      // What the desktop's agent launch rules let Outside Agents start on this host.
+      agentLaunch: { default: { presetId: 'echo' }, allowed: [{ presetId: 'echo' }] },
     });
 
     phone = await makePhone();
@@ -411,6 +426,7 @@ describe.skipIf(process.platform === 'win32' || !hasTmux)('phone server on an SS
       server.once('exit', (code) => fail(new Error(`server exited ${code}`)));
     });
     url = `ws://127.0.0.1:${port}/remote/ws`;
+    mcpUrl = `http://127.0.0.1:${port}/remote/mcp`;
   }, 300_000);
 
   afterAll(() => {
@@ -792,6 +808,73 @@ describe.skipIf(process.platform === 'win32' || !hasTmux)('phone server on an SS
     await inUse.connection.send({ type: 'app:workspaces:list', requestId: 'r3' });
     await inUse.connection.next((frame) => frame.type === 'app:workspaces');
     inUse.connection.close();
+  });
+
+  it('lets an Outside Agent start a workspace over MCP with its Agent Token alone', async () => {
+    const client = new Client({ name: 'test-bot', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(mcpUrl), {
+        requestInit: { headers: { Authorization: `Bearer ${AGENT_TOKEN}` } },
+      })
+    );
+    const value = (result: Awaited<ReturnType<Client['callTool']>>) =>
+      (result.structuredContent as { value: unknown }).value;
+
+    expect((await client.listTools()).tools.map(({ name }) => name)).toEqual([
+      'list_projects',
+      'list_workspaces',
+      'launch_workspace',
+      'workspace_status',
+    ]);
+    expect(value(await client.callTool({ name: 'list_projects', arguments: {} }))).toEqual({
+      projects: [{ id: 'p-app', name: 'app' }],
+    });
+    const started = value(
+      await client.callTool({
+        name: 'launch_workspace',
+        arguments: { project: 'app', prompt: 'hello from a bot', branch: 'bot-task' },
+      })
+    ) as { state: string; workspaceId: string; branch: string; agent: string };
+    expect(started).toMatchObject({ state: 'started', branch: 'bot-task', agent: 'Echo' });
+    const status = value(
+      await client.callTool({
+        name: 'workspace_status',
+        arguments: { workspaceId: started.workspaceId },
+      })
+    );
+    expect(status).toMatchObject({ id: started.workspaceId, project: 'app', environment: 'ssh' });
+    // ws-1 was cut in no project the token was given, so it stays out of sight.
+    const listed = (
+      value(await client.callTool({ name: 'list_workspaces', arguments: {} })) as Array<{
+        id: string;
+      }>
+    ).map(({ id }) => id);
+    expect(listed).toContain(started.workspaceId);
+    expect(listed).not.toContain('ws-1');
+    await client.close();
+  }, 60_000);
+
+  it('refuses an MCP request without the Agent Token, or from a browser page', async () => {
+    const ping = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
+    const headers = {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    };
+
+    const missing = await fetch(mcpUrl, { method: 'POST', headers, body: ping });
+    expect(missing.status).toBe(401);
+    const wrong = await fetch(mcpUrl, {
+      method: 'POST',
+      headers: { ...headers, authorization: `Bearer komla_agent_${'x'.repeat(43)}` },
+      body: ping,
+    });
+    expect(wrong.status).toBe(401);
+    const page = await fetch(mcpUrl, {
+      method: 'POST',
+      headers: { ...headers, authorization: `Bearer ${AGENT_TOKEN}`, origin: ORIGIN },
+      body: ping,
+    });
+    expect(page.status).toBe(403);
   });
 
   it('ends the session of a phone the desktop stops trusting', async () => {

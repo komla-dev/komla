@@ -765,6 +765,8 @@ void app.whenReady().then(async () => {
   agentTokenService.start();
   // Phone access to SSH hosts follows phone list changes over connections Komla already has.
   remoteControlHostAccessService.start();
+  // A host checks an Outside Agent's launch against the agents and modes it was last sent.
+  agentPresetService.onChange(() => void remoteControlHostAccessService.launchRulesChanged());
   onAttentionRaised((event) => {
     const workspace = workspaceService.get(event.workspaceId);
     // A workspace or terminal devices may not open doesn't buzz them either.

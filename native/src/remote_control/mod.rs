@@ -2,6 +2,7 @@
 //! Serve, that speaks the desktop's remote-control protocol and trusts the phones the desktop
 //! trusts. See ADR 0005 and `docs/REMOTE_CONTROL_SECURITY.md`.
 
+mod agent_mcp;
 mod attention;
 mod binary_frames;
 mod ceremony;

@@ -36,6 +36,8 @@ pub(crate) struct CreateRequest {
     pub(crate) name: Option<String>,
     pub(crate) branch: Option<String>,
     pub(crate) prompt: Option<String>,
+    /// The workspace's one-sentence summary, which an Outside Agent may give.
+    pub(crate) description: Option<String>,
 }
 
 /// The tab a phone asked to open.
@@ -103,7 +105,7 @@ pub(crate) fn create(
         &OfflineLaunchRequest {
             prompt: request.prompt.clone(),
             name: request.name.clone(),
-            description: None,
+            description: request.description.clone(),
             branch,
             from_current_branch: false,
             cwd: None,

@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
@@ -65,6 +65,9 @@ struct ManifestBackend {
     remote_directory: String,
     #[serde(default)]
     project_name: Option<String>,
+    /// The folder its project's worktrees go in, one per project on this host.
+    #[serde(default)]
+    remote_project_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,6 +97,7 @@ pub(crate) struct HostWorkspace {
     updated_at: Option<u64>,
     primary_terminal_id: Option<String>,
     pub(crate) terminals: Vec<HostTerminal>,
+    project_root: Option<PathBuf>,
 }
 
 fn is_id(value: &str) -> bool {
@@ -226,7 +230,14 @@ impl HostWorkspace {
             updated_at: manifest.updated_at,
             primary_terminal_id,
             terminals,
+            project_root: manifest.backend.remote_project_root,
         }
+    }
+
+    /// The project folder it was cut in. Two projects of the same name share one, so it names a
+    /// project only when no other project on the host has that folder.
+    pub(crate) fn project_root(&self) -> Option<&Path> {
+        self.project_root.as_deref()
     }
 
     /// The `RemoteWorkspaceSummary` the phone renders.
@@ -427,6 +438,19 @@ mod tests {
         assert_eq!(summary["terminals"][0]["environment"]["name"], "devbox");
         assert_eq!(summary["terminals"][1]["status"], "stopped");
         assert!(summary.get("agentActive").is_none());
+    }
+
+    #[test]
+    fn knows_which_project_folder_a_workspace_was_cut_in() {
+        let base = tempfile::tempdir().unwrap();
+        write_manifest(base.path(), "ws-1", json!({}));
+
+        let [workspace] = read_workspaces(base.path()).try_into().unwrap();
+
+        assert_eq!(
+            workspace.project_root(),
+            Some(Path::new("/home/u/.komla/worktrees/komla"))
+        );
     }
 
     #[test]

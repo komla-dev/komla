@@ -48,7 +48,8 @@ const token: AgentTokenSummary = {
 };
 
 const SECRET = `komla_agent_${'S'.repeat(43)}`;
-const MCP_URL = 'https://box.tail1.ts.net/remote/mcp';
+const MCP_URL = 'https://mac.tail1.ts.net/remote/mcp';
+const HOST_MCP = { hostName: 'devbox', url: 'https://devbox.tail1.ts.net:48123/remote/mcp' };
 
 function card(props: Partial<Parameters<typeof RemoteAgentTokensCard>[0]> = {}) {
   return render(
@@ -208,13 +209,62 @@ describe('RemoteAgentTokensCard', () => {
     ).toBeTruthy();
 
     await userEvent.click(screen.getByRole('button', { name: 'Copy MCP address' }));
-    expect(api.copyToClipboard).toHaveBeenCalledWith('https://box.tail1.ts.net/remote/mcp');
+    expect(api.copyToClipboard).toHaveBeenCalledWith(MCP_URL);
 
     await userEvent.click(screen.getByRole('button', { name: 'Revoke Grok bot' }));
     expect(api.agentTokensRevoke).toHaveBeenCalledWith('tok-1');
 
     emitChange([]);
     await waitFor(() => expect(screen.queryByText('Grok bot')).toBeNull());
+  });
+
+  it("gives a token limited to SSH hosts the host's own address, which works while this computer is off", async () => {
+    const { api } = installApi([]);
+    card({ hostMcp: HOST_MCP });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add an agent' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'Desk bot');
+    await userEvent.click(screen.getByLabelText('Web'));
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
+
+    expect(await screen.findByText(HOST_MCP.url)).toBeTruthy();
+    expect(screen.getByText(/works while this computer is off/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Copy MCP address' }));
+    expect(api.copyToClipboard).toHaveBeenCalledWith(HOST_MCP.url);
+    expect(screen.queryByText(MCP_URL)).toBeNull();
+  });
+
+  it("gives a token that may reach this computer this computer's address", async () => {
+    const { api } = installApi([]);
+    api.agentTokensCreate.mockResolvedValue({
+      token: SECRET,
+      summary: { ...token, sshOnly: false },
+    });
+    card({ hostMcp: HOST_MCP });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add an agent' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'Desk bot');
+    await userEvent.click(screen.getByLabelText('Web'));
+    await userEvent.selectOptions(screen.getByLabelText('Where'), 'anywhere');
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
+
+    expect(await screen.findByText(MCP_URL)).toBeTruthy();
+    expect(screen.queryByText(HOST_MCP.url)).toBeNull();
+  });
+
+  it('lists the host address too, and says a revoke reaches the host when Komla next connects', async () => {
+    const { api } = installApi([token]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    card({ hostMcp: HOST_MCP });
+
+    expect(await screen.findByText(HOST_MCP.url)).toBeTruthy();
+    expect(screen.getByText(MCP_URL)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke Grok bot' }));
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringMatching(/devbox stops taking it the next time Komla connects to it/)
+    );
+    expect(api.agentTokensRevoke).toHaveBeenCalledWith('tok-1');
   });
 
   it('warns in the form when an SSH-only token could start nothing yet', async () => {

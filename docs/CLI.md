@@ -722,7 +722,10 @@ tailnet, calls MCP on remote control's server instead, at `https://<computer>.<t
 `Authorization: Bearer komla_agent_…`. Approve one under Agent access, in the desktop's
 Settings › Remote or in the remote control page's Settings: name the agent, pick its projects,
 where it may work (SSH hosts only, unless you let it reach this computer too) and how long it
-works, up to never expiring. See
+works, up to never expiring. When the SSH host under Where agents start has direct access on,
+it serves the same tools itself at `https://<host>.<tailnet>.ts.net:<port>/remote/mcp`, which keeps
+working while your computer is off; Settings › Remote gives a token limited to SSH hosts that
+address. A revoke reaches that host the next time Komla connects to it. See
 [ADR 0013](adr/0013-outside-agents-reach-komla-through-remote-control.md).
 
 | Tool               | What it does                                                                                                                 |

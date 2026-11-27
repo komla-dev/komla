@@ -20,6 +20,7 @@ import { MANAGED_TMUX_SOCKET_NAME } from '../../shared/lib/ssh-tmux-attach';
 import { writeFileAtomicSync } from '../lib/atomic-write';
 import { createLogger } from '../lib/logger';
 
+import { agentTokenService, type HostAgentToken } from './agent-token.service';
 import { configService } from './config.service';
 import { pairedDeviceRegistryService } from './paired-device-registry.service';
 import { ensureKomlaBasePath } from './paths';
@@ -74,6 +75,14 @@ export interface RemoteControlHostAccessDeps {
     onChange(listener: (devices: PairedDeviceRecord[]) => void): () => void;
   };
   isRemoteControlEnabled?: () => boolean;
+  /**
+   * The Agent Tokens a host checks itself, so Outside Agents reach it while this computer is off:
+   * those of the Where-agents-start host, none for the others (ADR 0013).
+   */
+  agentTokens?: {
+    forHost(hostId: string): HostAgentToken[];
+    onChange(listener: () => void): () => void;
+  };
   /** Settings → Remote → "Ask for passkey again after", which hosts apply too. */
   passkeyWindowMs?: () => number;
   installationId?: (hostId: string) => string;
@@ -129,7 +138,8 @@ function isAllowedPhoneOrigin(origin: string): boolean {
 export async function buildTrustFile(
   devices: PairedDeviceRecord[],
   expiresAt: number,
-  resumeWindowMs: number
+  resumeWindowMs: number,
+  agentTokens: HostAgentToken[] = []
 ): Promise<string> {
   const keys = await Promise.all(devices.map((device) => credentialSpkiFromCose(device.publicKey)));
   return JSON.stringify({
@@ -151,18 +161,26 @@ export async function buildTrustFile(
         },
       ];
     }),
+    agentTokens,
   });
 }
 
 /** What changes the host's trust, without the lease time. */
-function trustDigest(devices: PairedDeviceRecord[], resumeWindowMs: number): string {
+function trustDigest(
+  devices: PairedDeviceRecord[],
+  resumeWindowMs: number,
+  agentTokens: HostAgentToken[]
+): string {
   const relevant = devices
     .map((device) =>
       JSON.stringify([device.deviceId, device.credentialId, device.label, device.origin])
     )
     .sort((left, right) => left.localeCompare(right));
+  const tokens = agentTokens
+    .map((token) => JSON.stringify(token))
+    .sort((left, right) => left.localeCompare(right));
   return createHash('sha256')
-    .update(JSON.stringify([resumeWindowMs, ...relevant]))
+    .update(JSON.stringify([resumeWindowMs, ...relevant, ...tokens]))
     .digest('hex')
     .slice(0, 16);
 }
@@ -303,6 +321,7 @@ export class RemoteControlHostAccessService {
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly listeners = new Set<() => void>();
   private unsubscribeDevices: (() => void) | null = null;
+  private unsubscribeAgentTokens: (() => void) | null = null;
 
   constructor(deps: RemoteControlHostAccessDeps = {}) {
     this.explicitStatePath = deps.statePath ?? null;
@@ -312,6 +331,13 @@ export class RemoteControlHostAccessService {
       isRemoteControlEnabled:
         deps.isRemoteControlEnabled ?? (() => Boolean(configService.get().directRemoteEnabled)),
       passkeyWindowMs: deps.passkeyWindowMs ?? (() => remotePasskeyWindowMs(configService.get())),
+      agentTokens: deps.agentTokens ?? {
+        forHost: (hostId) =>
+          configService.get().agentLaunchDefaultSshHostId === hostId
+            ? agentTokenService.hostShares()
+            : [],
+        onChange: (listener) => agentTokenService.onChange(listener),
+      },
       installationId: deps.installationId ?? sshCompanionInstallationId,
       resolveBasePath:
         deps.resolveBasePath ?? ((hostId) => sshWorkspaceService.resolveWorkspaceBasePath(hostId)),
@@ -338,11 +364,14 @@ export class RemoteControlHostAccessService {
     this.unsubscribeDevices = this.deps.devices.onChange(() => {
       void this.devicesChanged();
     });
+    this.unsubscribeAgentTokens = this.deps.agentTokens.onChange(() => this.agentTokensChanged());
   }
 
   stop(): void {
     this.unsubscribeDevices?.();
     this.unsubscribeDevices = null;
+    this.unsubscribeAgentTokens?.();
+    this.unsubscribeAgentTokens = null;
   }
 
   onChange(listener: () => void): () => void {
@@ -404,7 +433,7 @@ export class RemoteControlHostAccessService {
     }
     const due =
       entry.state !== 'ready' ||
-      entry.trustDigest !== trustDigest(this.deps.devices.list(), this.deps.passkeyWindowMs()) ||
+      entry.trustDigest !== this.currentTrustDigest(hostId) ||
       this.deps.now() - (entry.syncedAt ?? 0) >= LEASE_RENEW_AFTER_MS;
     void this.serialize(hostId, () => (due ? this.sync(host) : this.syncIfLaunchChanged(host)));
   }
@@ -432,15 +461,53 @@ export class RemoteControlHostAccessService {
     );
   }
 
+  /**
+   * An Agent Token was approved, revoked or used, or Where agents start moved to another host:
+   * hosts Komla can reach get their tokens now, others on connect.
+   */
+  agentTokensChanged(): void {
+    void this.devicesChanged(
+      'Your agent tokens reach this host the next time Komla connects to it.'
+    );
+  }
+
+  /**
+   * Agents, their modes, the pinned agent launch or a host's isolation changed. `launch.json` is
+   * what a host checks an Outside Agent's launch against, so hosts Komla can reach get it now; the
+   * rest get it when Komla next connects, as with every launch option.
+   */
+  async launchRulesChanged(): Promise<void> {
+    if (!this.deps.isRemoteControlEnabled()) return;
+    await Promise.all(
+      Object.entries(this.load().hosts)
+        .filter(([, entry]) => entry.enabled)
+        .map(async ([hostId]) => {
+          const host = this.deps.hosts.get(hostId);
+          if (!host || !(await this.deps.hasOpenConnection(host))) return;
+          await this.serialize(hostId, () => this.syncIfLaunchChanged(host));
+        })
+    );
+  }
+
+  private currentTrustDigest(hostId: string): string {
+    return trustDigest(
+      this.deps.devices.list(),
+      this.deps.passkeyWindowMs(),
+      this.deps.agentTokens.forHost(hostId)
+    );
+  }
+
   private async devicesChanged(
     pendingMessage = 'Your device list reaches this host the next time Komla connects to it.'
   ): Promise<void> {
     if (!this.deps.isRemoteControlEnabled()) return;
-    // A sign-in also saves the device list; only what the host's trust holds is worth a sync.
-    const digest = trustDigest(this.deps.devices.list(), this.deps.passkeyWindowMs());
+    // A sign-in or a token's use also saves; only what the host's trust holds is worth a sync.
     await Promise.all(
       Object.entries(this.load().hosts)
-        .filter(([, entry]) => entry.enabled && entry.trustDigest !== digest)
+        .filter(
+          ([hostId, entry]) =>
+            entry.enabled && entry.trustDigest !== this.currentTrustDigest(hostId)
+        )
         .map(async ([hostId]) => {
           const host = this.deps.hosts.get(hostId);
           if (!host) return;
@@ -515,6 +582,7 @@ export class RemoteControlHostAccessService {
     }
     const devices = this.deps.devices.list();
     const resumeWindowMs = this.deps.passkeyWindowMs();
+    const agentTokens = this.deps.agentTokens.forHost(host.id);
     try {
       const { basePath, plan } = await this.plan(host);
       // Without a new launch file the host keeps the one it has, and the next sync tries again.
@@ -522,7 +590,7 @@ export class RemoteControlHostAccessService {
       const output = await this.deps.runWithInput(
         host,
         buildSyncScript(plan),
-        `${await buildTrustFile(devices, this.deps.now() + PHONE_ACCESS_LEASE_MS, resumeWindowMs)}\n${launch ?? ''}`
+        `${await buildTrustFile(devices, this.deps.now() + PHONE_ACCESS_LEASE_MS, resumeWindowMs, agentTokens)}\n${launch ?? ''}`
       );
       const parts = sections(output);
       const init = parseJson(parts.get('init')) as { fingerprint?: unknown } | null;
@@ -563,7 +631,7 @@ export class RemoteControlHostAccessService {
         fingerprint,
         url: `wss://${dnsName}:${plan.port}${SOCKET_PATH}`,
         syncedAt: this.deps.now(),
-        trustDigest: trustDigest(devices, resumeWindowMs),
+        trustDigest: trustDigest(devices, resumeWindowMs, agentTokens),
         ...(launch !== null ? { launchDigest: launchDigest(launch) } : {}),
         stopPending: false,
       }));

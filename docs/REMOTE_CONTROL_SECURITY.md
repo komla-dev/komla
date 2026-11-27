@@ -163,7 +163,19 @@ reaches a terminal.
   and when remote control is turned off. A token a device approved also ends when the passkey it
   signed in with is removed. One the desktop approved belongs to no passkey, so removing passkeys
   leaves it working; each stored token records which of the two approved it.
-- SSH hosts' phone servers don't serve the route.
+- The Where-agents-start host's phone server serves the route too, so an agent keeps working while
+  this computer is off. The desktop puts each live token's SHA-256, projects and expiry, never its
+  label or the token, into that host's `trust.json` alone, under the phones' lease, and what
+  agents may start there into its `launch.json`, worked out by the same launch-mode rules. The host
+  applies the same checks: `401` without a live token (it compares hashes in constant time),
+  `403` for browser requests, and only the token's projects, matched by their folders on the
+  host. A project that shares its folder on the host with another, as two projects of the same name
+do, is left out. A failed launch's details stay in the host's log. A changed agent, mode, pinned
+agent launch or host isolation reaches a host Komla is connected to at once, and the others the
+next time it connects. A revoke reaches the host when Komla can
+  connect to it, at once if it can now; until then the host keeps taking the token, for at most the
+  7-day lease. Requests to the route are plain HTTP behind Tailscale Serve, one per connection, with
+  a 16 KiB head and a body of at most 320 KiB.
 
 ## Transcript and key binding
 

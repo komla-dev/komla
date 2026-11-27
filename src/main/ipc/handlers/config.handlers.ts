@@ -116,6 +116,14 @@ export function registerConfigHandlers(): void {
     if (updates.directRemotePasskeyWindowMinutes !== undefined) {
       remoteControlHostAccessService.passkeyWindowChanged();
     }
+    if ('agentLaunchDefaultPresetId' in updates || 'agentLaunchDefaultLaunchModeId' in updates) {
+      // The pinned agent and mode may start anywhere, so hosts check against them too.
+      void remoteControlHostAccessService.launchRulesChanged();
+    }
+    if ('agentLaunchDefaultSshHostId' in updates) {
+      // Only the host agents start on checks Agent Tokens itself.
+      remoteControlHostAccessService.agentTokensChanged();
+    }
     return config;
   });
 
@@ -144,6 +152,8 @@ export function registerConfigHandlers(): void {
     sshWorkspaceService.forgetHost(saved.id);
     void sshPortForwardService.reconcileHostPortForwards(saved);
     broadcastSshHostsChanged();
+    // Marking a host isolated or not changes which modes agents may start there.
+    void remoteControlHostAccessService.launchRulesChanged();
     // A host added on this device brings along the workspaces other devices started there.
     if (!saved.setupPending) void workspaceService.sshSync.syncSoon(saved.id, { now: true });
     return saved;

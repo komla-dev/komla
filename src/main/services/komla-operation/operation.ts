@@ -15,9 +15,10 @@ import {
 import { canStartWithPrompt } from '../../../shared/lib/agent-preset-prompt';
 import { isBrowserUrl } from '../../../shared/lib/browser-tabs';
 import {
-  agentLaunchPolicy,
   agentsMayLaunch,
   isIsolatedEnvironment,
+  pinnedAgentLaunch,
+  pinnedAgentLaunchPolicy,
   skipsPermissionPrompts,
 } from '../../../shared/lib/launch-mode-permissions';
 import { levelPickerOf, shownReasoningLevels } from '../../../shared/lib/level-picker';
@@ -70,7 +71,6 @@ import {
 import type { AgentTurnEnd } from './agent-turn-end';
 import type { KomlaOperationResults } from './result-schema';
 import type {
-  AgentLaunchPolicy,
   AgentPreset,
   ActivePresetEntry,
   ReasoningLevel,
@@ -255,30 +255,6 @@ function isolatedOnlyEffortRefusal(
     403,
     { presetId: preset.id, effortId: effort.id, environment }
   );
-}
-
-interface AgentLaunchPin {
-  presetId?: string;
-  modeId?: string;
-}
-
-/** The agent and mode the user pinned for agent launches. */
-function pinnedAgentLaunch(
-  config: ReturnType<KomlaOperationDependencies['getConfig']>
-): AgentLaunchPin {
-  return {
-    presetId: config.agentLaunchDefaultPresetId ?? undefined,
-    modeId: config.agentLaunchDefaultLaunchModeId ?? undefined,
-  };
-}
-
-/** Where agents may start a mode: anywhere for the one the user pinned for agent launches. */
-function pinnedAgentLaunchPolicy(
-  pin: AgentLaunchPin,
-  presetId: string,
-  mode: AgentPreset['launchModes'][number]
-): AgentLaunchPolicy {
-  return presetId === pin.presetId && mode.id === pin.modeId ? 'always' : agentLaunchPolicy(mode);
 }
 
 export interface KomlaOperationContext {

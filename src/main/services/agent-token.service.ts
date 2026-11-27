@@ -48,6 +48,14 @@ export interface AgentTokenRecord extends AgentTokenSummary {
   approvedBy: AgentTokenApprover;
 }
 
+/** What an SSH host needs to check a token itself while the desktop is off (ADR 0013). */
+export interface HostAgentToken {
+  id: string;
+  tokenHash: string;
+  projectIds: string[];
+  expiresAt: number | null;
+}
+
 export interface CreateAgentTokenRequest {
   label: string;
   projectIds: readonly string[];
@@ -187,6 +195,16 @@ export class AgentTokenService {
       );
     }
     return record;
+  }
+
+  /** The live tokens as the Where-agents-start host gets them: hashes, never labels or secrets. */
+  hostShares(): HostAgentToken[] {
+    return this.live().map(({ id, tokenHash, projectIds, expiresAt }) => ({
+      id,
+      tokenHash,
+      projectIds: [...projectIds],
+      expiresAt,
+    }));
   }
 
   revoke(id: string): boolean {

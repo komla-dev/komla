@@ -30,6 +30,31 @@ export function agentLaunchPolicy(
   return skipsPermissionPrompts(mode) ? 'isolated' : 'always';
 }
 
+export interface AgentLaunchPin {
+  presetId?: string;
+  modeId?: string;
+}
+
+/** The agent and mode the user pinned for agent launches. */
+export function pinnedAgentLaunch(config: {
+  agentLaunchDefaultPresetId?: string | null;
+  agentLaunchDefaultLaunchModeId?: string | null;
+}): AgentLaunchPin {
+  return {
+    presetId: config.agentLaunchDefaultPresetId ?? undefined,
+    modeId: config.agentLaunchDefaultLaunchModeId ?? undefined,
+  };
+}
+
+/** Where agents may start a mode: anywhere for the one the user pinned for agent launches. */
+export function pinnedAgentLaunchPolicy(
+  pin: AgentLaunchPin,
+  presetId: string,
+  mode: Pick<LaunchMode, 'id' | 'arguments' | 'agentLaunch'>
+): AgentLaunchPolicy {
+  return presetId === pin.presetId && mode.id === pin.modeId ? 'always' : agentLaunchPolicy(mode);
+}
+
 /** Whether an agent may start a mode with this policy where the new agent would run. */
 export function agentsMayLaunch(policy: AgentLaunchPolicy, isolated: boolean): boolean {
   return policy === 'always' || (policy === 'isolated' && isolated);

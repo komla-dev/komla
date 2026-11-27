@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockElectron } from '../../mocks/electron';
 
 vi.mock('electron', () => mockElectron());
+vi.mock('../../../src/main/services/agent-token.service', () => ({
+  agentTokenService: { hostShares: () => [], onChange: () => () => {} },
+}));
 vi.mock('../../../src/main/services/config.service', () => ({
   configService: { get: vi.fn(() => ({ directRemoteEnabled: true })) },
 }));
@@ -168,6 +171,13 @@ describe('RemoteControlHostAccessService', () => {
   let launchBuilds: number;
   let inputs: string[];
   let passkeyWindowMs: number;
+  let agentTokens: Array<{
+    id: string;
+    tokenHash: string;
+    projectIds: string[];
+    expiresAt: number | null;
+  }>;
+  let agentTokenListeners: Array<() => void>;
 
   function makeService() {
     return new RemoteControlHostAccessService({
@@ -182,6 +192,13 @@ describe('RemoteControlHostAccessService', () => {
       },
       isRemoteControlEnabled: () => remoteEnabled,
       passkeyWindowMs: () => passkeyWindowMs,
+      agentTokens: {
+        forHost: (hostId) => (hostId === 'host-1' ? agentTokens : []),
+        onChange: (listener) => {
+          agentTokenListeners.push(listener);
+          return () => {};
+        },
+      },
       installationId: (hostId) => `/Users/me/.komla\0${hostId}`,
       resolveBasePath: async () => '/home/me/.komla',
       ensureCompanion: async () => '/home/me/.komla/helpers/komla',
@@ -213,6 +230,8 @@ describe('RemoteControlHostAccessService', () => {
     launchBuilds = 0;
     inputs = [];
     passkeyWindowMs = 15 * 60_000;
+    agentTokens = [];
+    agentTokenListeners = [];
   });
 
   afterEach(() => {
@@ -265,6 +284,28 @@ describe('RemoteControlHostAccessService', () => {
     service.hostConnected('host-1');
     await vi.waitFor(() => expect(inputs.some((input) => input.includes('"id":"new"'))).toBe(true));
     expect(launchBuilds).toBe(1);
+  });
+
+  it('sends a host it can reach a tightened agent launch rule at once', async () => {
+    outputs = [syncOutput(), '__KOMLA_PHONE__served'];
+    const service = makeService();
+    await service.setEnabled('host-1', true);
+    const synced = scripts.length;
+
+    // Nothing changed: nothing to send.
+    await service.launchRulesChanged();
+    expect(scripts).toHaveLength(synced);
+
+    launch = JSON.stringify({ version: 1, hostId: 'host-1', agentLaunch: { allowed: [] } });
+    outputs = [syncOutput({ AllowFunnel: {} }), '__KOMLA_PHONE__served'];
+    await service.launchRulesChanged();
+    expect(inputs.at(-2)).toContain('"agentLaunch":{"allowed":[]}');
+
+    openConnection = false;
+    launch = JSON.stringify({ version: 1, hostId: 'host-1', agentLaunch: { allowed: [{}] } });
+    const before = scripts.length;
+    await service.launchRulesChanged();
+    expect(scripts).toHaveLength(before);
   });
 
   it('still renews trust when the launch options cannot be built', async () => {
@@ -387,6 +428,43 @@ describe('RemoteControlHostAccessService', () => {
     outputs = [syncOutput({ AllowFunnel: {} }), '__KOMLA_PHONE__served'];
     service.hostConnected('host-1');
     await vi.waitFor(() => expect(lastWindow()).toBe(5 * 60_000));
+  });
+
+  it("sends the Where-agents-start host the Agent Tokens' hashes, now or when Komla next connects", async () => {
+    const lastTrust = () =>
+      JSON.parse(
+        inputs
+          .filter((input) => input.startsWith('{'))
+          .at(-1)!
+          .split('\n')[0]
+      );
+    const token = { id: 'tok-1', tokenHash: 'a'.repeat(64), projectIds: ['p-app'], expiresAt: null };
+    agentTokens = [token];
+    outputs = [syncOutput(), '__KOMLA_PHONE__served'];
+    const service = makeService();
+    service.start();
+    await service.setEnabled('host-1', true);
+    expect(lastTrust().agentTokens).toEqual([token]);
+
+    // Using a token changes nothing the host holds.
+    const synced = scripts.length;
+    for (const notify of agentTokenListeners) notify();
+    await new Promise((done) => setTimeout(done, 0));
+    expect(scripts).toHaveLength(synced);
+
+    agentTokens = [];
+    outputs = [syncOutput({ AllowFunnel: {} }), '__KOMLA_PHONE__served'];
+    for (const notify of agentTokenListeners) notify();
+    await vi.waitFor(() => expect(lastTrust().agentTokens).toEqual([]));
+
+    openConnection = false;
+    agentTokens = [token];
+    for (const notify of agentTokenListeners) notify();
+    await vi.waitFor(() => expect(service.list()[0]?.state).toBe('pending'));
+    expect(service.list()[0]?.message).toMatch(/agent tokens reach this host/);
+    outputs = [syncOutput({ AllowFunnel: {} }), '__KOMLA_PHONE__served'];
+    service.hostConnected('host-1');
+    await vi.waitFor(() => expect(lastTrust().agentTokens).toEqual([token]));
   });
 
   it('stops host servers when remote control or phone access is turned off', async () => {

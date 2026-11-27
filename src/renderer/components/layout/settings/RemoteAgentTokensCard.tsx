@@ -74,6 +74,11 @@ interface RemoteAgentTokensCardProps {
   remoteOn: boolean;
   /** "Allow access to this computer", which decides whether a token may reach it too. */
   localAccess: boolean;
+  /**
+   * The Where-agents-start host's own route, once it serves one: it checks tokens itself, so an
+   * agent limited to SSH hosts keeps working there while this computer is off.
+   */
+  hostMcp?: { hostName: string; url: string } | null;
 }
 
 /**
@@ -84,6 +89,7 @@ export function RemoteAgentTokensCard({
   mcpUrl,
   remoteOn,
   localAccess,
+  hostMcp = null,
 }: RemoteAgentTokensCardProps) {
   const tokens = useAgentTokens();
   const projects = useProjectsStore((s) => s.projects);
@@ -111,7 +117,10 @@ export function RemoteAgentTokensCard({
   };
 
   const revoke = async (token: AgentTokenSummary) => {
-    if (!window.confirm(`Revoke "${token.label}"? It stops working at once.`)) return;
+    const where = hostMcp
+      ? ` here at once; ${hostMcp.hostName} stops taking it the next time Komla connects to it`
+      : ' at once';
+    if (!window.confirm(`Revoke "${token.label}"? It stops working${where}.`)) return;
     try {
       await window.api.agentTokensRevoke(token.id);
       addToast(`Revoked ${token.label}`, 'success');
@@ -171,13 +180,27 @@ export function RemoteAgentTokensCard({
             copyLabel="Copy token"
             onCopy={() => copy(view.token, 'Token')}
           />
-          {mcpUrl && (
-            <SecretRow
-              label="MCP address"
-              value={mcpUrl}
-              copyLabel="Copy MCP address"
-              onCopy={() => copy(mcpUrl, 'MCP address')}
-            />
+          {view.summary.sshOnly && hostMcp ? (
+            <>
+              <SecretRow
+                label="MCP address"
+                value={hostMcp.url}
+                copyLabel="Copy MCP address"
+                onCopy={() => copy(hostMcp.url, 'MCP address')}
+              />
+              <p className="text-ui text-muted-foreground">
+                {hostMcp.hostName} answers it itself, so it works while this computer is off.
+              </p>
+            </>
+          ) : (
+            mcpUrl && (
+              <SecretRow
+                label="MCP address"
+                value={mcpUrl}
+                copyLabel="Copy MCP address"
+                onCopy={() => copy(mcpUrl, 'MCP address')}
+              />
+            )
           )}
           <div className="flex justify-end">
             <Button size="sm" onClick={() => setView('list')}>
@@ -187,18 +210,20 @@ export function RemoteAgentTokensCard({
         </div>
       )}
       {view === 'list' && mcpUrl && tokens.length > 0 && (
-        <div className="flex items-center gap-2 text-ui text-muted-foreground">
-          <span className="min-w-0 truncate">
-            Agents call <span className="font-mono">{mcpUrl}</span>
-          </span>
-          <IconButton
-            label="Copy MCP address"
-            size="sm"
-            onClick={() => copy(mcpUrl, 'MCP address')}
-          >
-            <Copy className="size-3.5" />
-          </IconButton>
-        </div>
+        <AddressRow
+          intro="Agents call"
+          url={mcpUrl}
+          copyLabel="Copy MCP address"
+          onCopy={() => copy(mcpUrl, 'MCP address')}
+        />
+      )}
+      {view === 'list' && hostMcp && tokens.some((token) => token.sshOnly) && (
+        <AddressRow
+          intro="With this computer off, agents limited to SSH hosts call"
+          url={hostMcp.url}
+          copyLabel={`Copy ${hostMcp.hostName}'s MCP address`}
+          onCopy={() => copy(hostMcp.url, 'MCP address')}
+        />
       )}
       {tokens.map((token) => (
         <div key={token.id} className="flex items-center gap-3">
@@ -222,6 +247,29 @@ export function RemoteAgentTokensCard({
         </div>
       ))}
     </SettingsCard>
+  );
+}
+
+function AddressRow({
+  intro,
+  url,
+  copyLabel,
+  onCopy,
+}: {
+  intro: string;
+  url: string;
+  copyLabel: string;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-ui text-muted-foreground">
+      <span className="min-w-0 truncate">
+        {intro} <span className="font-mono">{url}</span>
+      </span>
+      <IconButton label={copyLabel} size="sm" onClick={onCopy}>
+        <Copy className="size-3.5" />
+      </IconButton>
+    </div>
   );
 }
 

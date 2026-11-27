@@ -9,6 +9,8 @@ const state = vi.hoisted(() => ({
   projects: [] as Project[],
   presets: new Map<string, AgentPreset>(),
   remotes: new Map<string, string>(),
+  config: {} as Record<string, unknown>,
+  isolated: false,
 }));
 
 vi.mock('../../../src/main/lib/logger', () => ({
@@ -16,8 +18,15 @@ vi.mock('../../../src/main/lib/logger', () => ({
 }));
 vi.mock('../../../src/main/services/config.service', () => ({
   configService: {
-    get: vi.fn(() => ({ defaultLaunchModeId: 'auto', gitDefaults: { branchPrefix: 'me/' } })),
+    get: vi.fn(() => ({
+      defaultLaunchModeId: 'auto',
+      gitDefaults: { branchPrefix: 'me/' },
+      ...state.config,
+    })),
   },
+}));
+vi.mock('../../../src/main/services/ssh-host.service', () => ({
+  sshHostService: { get: (id: string) => ({ id, name: id, isolated: state.isolated }) },
 }));
 vi.mock('../../../src/main/services/project.service', () => ({
   projectService: { list: () => state.projects },
@@ -60,6 +69,8 @@ vi.mock('../../../src/main/services/agent-preset.service', () => ({
     get: (id: string) => state.presets.get(id),
     resolvePosixPromptTemplate: (preset: AgentPreset, modeId?: string) => {
       if (!preset.promptCommand || modeId === 'windows-only') return undefined;
+      // A preset whose plain command runs only on Windows.
+      if (!modeId && preset.openCommand === 'windows-only') return undefined;
       const mode = modeId ? ` --${modeId}` : '';
       return {
         promptCommand: `${preset.promptCommand}${mode} {{prompt}}`,
@@ -109,6 +120,8 @@ describe('buildHostLaunchFile', () => {
     state.projects = [];
     state.presets = new Map();
     state.remotes = new Map();
+    state.config = {};
+    state.isolated = false;
     configureHostLaunch({
       projectIdsOnHost: (hostId) =>
         new Set(hostId === 'host-1' ? ['p-app', 'p-local', 'p-folder', 'p-broken'] : []),
@@ -180,6 +193,81 @@ describe('buildHostLaunchFile', () => {
         ],
       },
     ]);
+  });
+
+  describe('what Outside Agents may start there', () => {
+    beforeEach(() => {
+      state.projects = [project({})];
+      state.remotes.set('/Users/me/app', 'git@github.com:me/app.git');
+      state.presets.set(
+        'claude',
+        preset({
+          launchModes: [
+            { id: 'plan', name: 'Plan', arguments: '--permission-mode plan' },
+            { id: 'yolo', name: 'YOLO', arguments: '--dangerously-skip-permissions' },
+            { id: 'mine', name: 'Mine', agentLaunch: 'never' },
+          ],
+        } as Partial<AgentPreset>)
+      );
+    });
+
+    it('allows the modes agents may start on a host that is not isolated', async () => {
+      const file = JSON.parse(await buildHostLaunchFile('host-1', '/home/me/.komla'));
+
+      expect(file.agentLaunch).toEqual({
+        allowed: [{ presetId: 'claude' }, { presetId: 'claude', launchModeId: 'plan' }],
+      });
+    });
+
+    it('allows an agent without a mode only when the host can start it so', async () => {
+      state.presets.set(
+        'claude',
+        preset({ launchModes: [{ id: 'plan', name: 'Plan' }] } as Partial<AgentPreset>)
+      );
+      state.presets.set(
+        'noplain',
+        preset({ id: 'noplain', name: 'No plain', promptCommand: 'np' })
+      );
+      const withoutPlain = state.presets.get('noplain')!;
+      // Only its Plan mode has a POSIX command on the host.
+      withoutPlain.launchModes = [{ id: 'plan', name: 'Plan' }];
+      withoutPlain.openCommand = 'windows-only';
+
+      const file = JSON.parse(await buildHostLaunchFile('host-1', '/home/me/.komla'));
+
+      expect(file.agentLaunch.allowed).toContainEqual({ presetId: 'claude' });
+      expect(file.agentLaunch.allowed).not.toContainEqual({ presetId: 'noplain' });
+    });
+
+    it('allows a mode that skips permission prompts on a host marked isolated', async () => {
+      state.isolated = true;
+
+      const file = JSON.parse(await buildHostLaunchFile('host-1', '/home/me/.komla'));
+
+      expect(file.agentLaunch.allowed).toEqual([
+        { presetId: 'claude' },
+        { presetId: 'claude', launchModeId: 'plan' },
+        { presetId: 'claude', launchModeId: 'yolo' },
+      ]);
+    });
+
+    it('starts the agent and mode pinned for agent launches, which agents may always start', async () => {
+      state.config = {
+        agentLaunchDefaultPresetId: 'claude',
+        agentLaunchDefaultLaunchModeId: 'yolo',
+      };
+
+      const file = JSON.parse(await buildHostLaunchFile('host-1', '/home/me/.komla'));
+
+      expect(file.agentLaunch).toEqual({
+        default: { presetId: 'claude', launchModeId: 'yolo' },
+        allowed: [
+          { presetId: 'claude' },
+          { presetId: 'claude', launchModeId: 'plan' },
+          { presetId: 'claude', launchModeId: 'yolo' },
+        ],
+      });
+    });
   });
 
   it("gives projects their icons while the host's launch options still fit one frame", async () => {

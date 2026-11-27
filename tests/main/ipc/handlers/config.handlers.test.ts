@@ -40,6 +40,8 @@ const mockMetricsCollectorService = {
 
 const mockRemoteControlHostAccessService = {
   passkeyWindowChanged: vi.fn(),
+  agentTokensChanged: vi.fn(),
+  launchRulesChanged: vi.fn(async () => {}),
 };
 
 const mockRemoteControlKeepAwakeService = {
@@ -641,5 +643,37 @@ describe('config IPC handlers', () => {
     expect(mockRemoteControlHostAccessService.passkeyWindowChanged).not.toHaveBeenCalled();
     await ipcMain._invoke('config:update', { directRemotePasskeyWindowMinutes: 60 });
     expect(mockRemoteControlHostAccessService.passkeyWindowChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves Agent Tokens to the host agents now start on', async () => {
+    const { registerConfigHandlers } =
+      await import('../../../../src/main/ipc/handlers/config.handlers');
+    const { ipcMain } = (await import('electron')) as unknown as {
+      ipcMain: { _invoke: (channel: string, ...args: unknown[]) => Promise<unknown> };
+    };
+    mockConfigService.update.mockReturnValue(mockConfig);
+
+    registerConfigHandlers();
+
+    await ipcMain._invoke('config:update', { directRemoteKeepAwake: true });
+    expect(mockRemoteControlHostAccessService.agentTokensChanged).not.toHaveBeenCalled();
+    await ipcMain._invoke('config:update', { agentLaunchDefaultSshHostId: 'host-2' });
+    expect(mockRemoteControlHostAccessService.agentTokensChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends hosts the pinned agent launch when it changes', async () => {
+    const { registerConfigHandlers } =
+      await import('../../../../src/main/ipc/handlers/config.handlers');
+    const { ipcMain } = (await import('electron')) as unknown as {
+      ipcMain: { _invoke: (channel: string, ...args: unknown[]) => Promise<unknown> };
+    };
+    mockConfigService.update.mockReturnValue(mockConfig);
+
+    registerConfigHandlers();
+
+    await ipcMain._invoke('config:update', { directRemoteKeepAwake: true });
+    expect(mockRemoteControlHostAccessService.launchRulesChanged).not.toHaveBeenCalled();
+    await ipcMain._invoke('config:update', { agentLaunchDefaultLaunchModeId: 'yolo' });
+    expect(mockRemoteControlHostAccessService.launchRulesChanged).toHaveBeenCalledTimes(1);
   });
 });

@@ -789,6 +789,7 @@ class AgentPresetService {
   private initialized = false;
   private saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly SAVE_DEBOUNCE_MS = 500;
+  private readonly changeListeners = new Set<() => void>();
 
   constructor() {
     const komlaPath = getKomlaBasePath();
@@ -908,12 +909,30 @@ class AgentPresetService {
       presets: this.list(),
     };
     writeFileAtomicSync(this.presetsPath, JSON.stringify(config, null, 2));
+    this.notifyListeners();
+  }
+
+  /** Called after presets are saved or reloaded from disk, in the main process. */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private notifyListeners(): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.error('Agent preset listener failed:', error);
+      }
+    }
   }
 
   private async startWatcher(): Promise<void> {
     this.watcher = new FileWatcher(this.presetsPath, () => {
       this.loadConfig();
       this.notifyRenderer();
+      this.notifyListeners();
     });
     await this.watcher.start();
   }

@@ -27,6 +27,37 @@ pub(crate) struct HostLaunch {
     projects: Vec<LaunchProject>,
     #[serde(default)]
     presets: Vec<LaunchPreset>,
+    /// What Outside Agents may start here, as the desktop's agent launch rules decide for this
+    /// host. Without it they may start nothing.
+    #[serde(default)]
+    agent_launch: Option<AgentLaunchRules>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct AgentLaunchChoice {
+    preset_id: String,
+    #[serde(default)]
+    launch_mode_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentLaunchRules {
+    /// The agent and mode the user pinned for agent launches, or the agent that starts unnamed.
+    #[serde(default)]
+    default: Option<AgentLaunchChoice>,
+    /// Every agent and mode agents may start on this host; no mode is the agent's default.
+    allowed: Vec<AgentLaunchChoice>,
+}
+
+/// A project an Outside Agent may start workspaces in here.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AgentProject {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    /// The folder its worktrees go in, which its workspaces' manifests name.
+    pub(crate) root: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +142,170 @@ impl HostLaunch {
             Some(id) => presets.find(|preset| summary_id(&preset.summary) == id),
             None => presets.next(),
         }
+    }
+
+    /// Of `ids`, the projects set up here, as an Outside Agent sees them.
+    pub(crate) fn agent_projects(&self, base: &Path, ids: &[String]) -> Vec<AgentProject> {
+        // Workspaces name their project only by the folder they were cut in, which the desktop
+        // derives from the project's name. A token must not see another project's through it.
+        let shares_root = |root: &Path| {
+            self.projects
+                .iter()
+                .filter(|entry| entry.project.remote_project_root == root)
+                .count()
+                > 1
+        };
+        self.projects
+            .iter()
+            .filter(|entry| {
+                entry.usable(base)
+                    && ids.iter().any(|id| id == summary_id(&entry.summary))
+                    && !shares_root(&entry.project.remote_project_root)
+            })
+            .map(|entry| AgentProject {
+                id: summary_id(&entry.summary).to_owned(),
+                name: entry.summary["name"]
+                    .as_str()
+                    .or(entry.project.project_name.as_deref())
+                    .unwrap_or_default()
+                    .to_owned(),
+                root: entry.project.remote_project_root.clone(),
+            })
+            .collect()
+    }
+
+    /// The agent's and mode's names, as an Outside Agent is told what it started.
+    pub(crate) fn names(
+        &self,
+        preset_id: &str,
+        launch_mode_id: Option<&str>,
+    ) -> (String, Option<String>) {
+        let preset = self
+            .presets
+            .iter()
+            .find(|preset| summary_id(&preset.summary) == preset_id);
+        let agent = preset.map_or(preset_id, LaunchPreset::name).to_owned();
+        let mode = launch_mode_id.map(|id| {
+            preset
+                .and_then(|preset| preset.summary["launchModes"].as_array())
+                .and_then(|modes| modes.iter().find(|mode| mode["id"] == id))
+                .and_then(|mode| mode["name"].as_str())
+                .unwrap_or(id)
+                .to_owned()
+        });
+        (agent, mode)
+    }
+
+    /// The agent and mode an Outside Agent asked for, by name or id, as ids, when agents may
+    /// start them here. Unnamed, they are the ones the user pinned for agent launches.
+    pub(crate) fn agent_launch(
+        &self,
+        agent: Option<&str>,
+        mode: Option<&str>,
+    ) -> Result<(String, Option<String>), String> {
+        let Some(rules) = &self.agent_launch else {
+            return Err("No agent may start on this host for you yet. Komla on the user's computer shares that when it next connects.".to_owned());
+        };
+        let startable: Vec<&LaunchPreset> = self
+            .presets
+            .iter()
+            .filter(|preset| {
+                !preset.launches.is_empty()
+                    && rules
+                        .allowed
+                        .iter()
+                        .any(|choice| choice.preset_id == summary_id(&preset.summary))
+            })
+            .collect();
+        let names = || {
+            startable
+                .iter()
+                .map(|preset| preset.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let preset = match agent {
+            Some(agent) => startable
+                .iter()
+                .find(|preset| {
+                    summary_id(&preset.summary) == agent
+                        || preset.name().eq_ignore_ascii_case(agent)
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "No agent named \"{agent}\" starts on this host. Agents: {}",
+                        names()
+                    )
+                })?,
+            None => rules
+                .default
+                .as_ref()
+                .and_then(|choice| {
+                    startable
+                        .iter()
+                        .find(|preset| summary_id(&preset.summary) == choice.preset_id)
+                })
+                .or_else(|| startable.first())
+                .ok_or_else(|| "No agent may start on this host for you yet.".to_owned())?,
+        };
+        let preset_id = summary_id(&preset.summary).to_owned();
+        let modes = preset.summary["launchModes"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let mode_name = |id: &str| {
+            modes
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .and_then(|entry| entry["name"].as_str())
+                .unwrap_or(id)
+                .to_owned()
+        };
+        let launch_mode_id = match mode {
+            Some(mode) => Some(
+                modes
+                    .iter()
+                    .find(|entry| {
+                        entry["id"] == mode
+                            || entry["name"]
+                                .as_str()
+                                .is_some_and(|name| name.eq_ignore_ascii_case(mode))
+                    })
+                    .and_then(|entry| entry["id"].as_str())
+                    .ok_or_else(|| {
+                        let known = modes
+                            .iter()
+                            .filter_map(|entry| entry["name"].as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "{} has no launch mode \"{mode}\". Its modes: {known}",
+                            preset.name()
+                        )
+                    })?
+                    .to_owned(),
+            ),
+            None => rules
+                .default
+                .as_ref()
+                .filter(|choice| choice.preset_id == preset_id)
+                .and_then(|choice| choice.launch_mode_id.clone()),
+        };
+        let choice = AgentLaunchChoice {
+            preset_id: preset_id.clone(),
+            launch_mode_id: launch_mode_id.clone(),
+        };
+        if !rules.allowed.contains(&choice) {
+            return Err(match &launch_mode_id {
+                Some(id) => format!(
+                    "Launch mode \"{}\" of {} can't be started by agents on this host. The user can let agents start it in Komla's Settings → Agents.",
+                    mode_name(id),
+                    preset.name()
+                ),
+                None => format!("{} can't be started by agents on this host.", preset.name()),
+            });
+        }
+        Ok((preset_id, launch_mode_id))
     }
 
     /// The `app:launch-options` reply: nothing to start until a project's repository is here.
@@ -326,6 +521,75 @@ pub(crate) mod tests {
             assert_eq!(frame["environments"], json!([]));
         }
         assert!(HostLaunch::parse(br#"{"version":2,"hostId":"h"}"#).is_err());
+    }
+
+    fn with_agent_launch(base: &Path, agent_launch: Value) -> HostLaunch {
+        let mut file = launch_json(base);
+        file["agentLaunch"] = agent_launch;
+        HostLaunch::parse(file.to_string().as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn lets_an_outside_agent_start_only_what_agents_may_start_here() {
+        let base = tempfile::tempdir().unwrap();
+        let launch = with_agent_launch(
+            base.path(),
+            json!({
+                "default": { "presetId": "claude" },
+                "allowed": [{ "presetId": "claude" }],
+            }),
+        );
+
+        // Names or ids, in any case; no agent is the default one, in the default mode.
+        assert_eq!(
+            launch.agent_launch(None, None),
+            Ok(("claude".to_owned(), None))
+        );
+        assert_eq!(
+            launch.agent_launch(Some("claude code"), None),
+            Ok(("claude".to_owned(), None))
+        );
+        let refused = launch
+            .agent_launch(Some("Claude Code"), Some("yolo"))
+            .unwrap_err();
+        assert!(refused.contains("YOLO"), "{refused}");
+        assert!(launch
+            .agent_launch(Some("Codex"), None)
+            .unwrap_err()
+            .contains("Claude Code"));
+        assert!(launch
+            .agent_launch(None, Some("turbo"))
+            .unwrap_err()
+            .contains("YOLO"));
+    }
+
+    #[test]
+    fn starts_the_pinned_mode_when_the_agent_names_none() {
+        let base = tempfile::tempdir().unwrap();
+        let launch = with_agent_launch(
+            base.path(),
+            json!({
+                "default": { "presetId": "claude", "launchModeId": "yolo" },
+                "allowed": [{ "presetId": "claude", "launchModeId": "yolo" }],
+            }),
+        );
+
+        assert_eq!(
+            launch.agent_launch(None, None),
+            Ok(("claude".to_owned(), Some("yolo".to_owned())))
+        );
+        assert_eq!(
+            launch.agent_launch(Some("claude"), Some("YOLO")),
+            Ok(("claude".to_owned(), Some("yolo".to_owned())))
+        );
+    }
+
+    #[test]
+    fn lets_an_outside_agent_start_nothing_without_the_desktops_say() {
+        let base = tempfile::tempdir().unwrap();
+        let launch = HostLaunch::parse(launch_json(base.path()).to_string().as_bytes()).unwrap();
+
+        assert!(launch.agent_launch(None, None).is_err());
     }
 
     #[test]

@@ -1,10 +1,11 @@
 //! `komla __phone-serve <config>`: the localhost WebSocket server a phone reaches through
-//! Tailscale Serve on this host, and `__phone-init <state-dir>`, which creates the host identity
-//! and prints its fingerprint for the desktop.
+//! Tailscale Serve on this host, which also answers Outside Agents' MCP requests at `/remote/mcp`,
+//! and `__phone-init <state-dir>`, which creates the host identity and prints its fingerprint for
+//! the desktop.
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -13,7 +14,7 @@ use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context};
 use base64::engine::general_purpose::STANDARD;
@@ -26,17 +27,23 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tungstenite::{Message, WebSocket};
 
+use super::agent_mcp::{self, AgentHost, AgentWorkspace, HttpRequest, HttpResponse};
 use super::attention::{AttentionBoard, HookInbox};
 use super::binary_frames::decode_terminal_input;
 use super::ceremony::{Ceremony, CeremonyContext, CeremonyOutcome, AUTH_CEREMONY_TIMEOUT_MS};
 use super::crypto::HostIdentity;
+use super::launch::HostLaunch;
 use super::outbox::{Outbox, Outcome};
 use super::peer::{expect_object, Decoded, HostPeer, PeerClose, PeerEvent, MAX_FRAME_CHARS};
 use super::resume::ResumeStore;
 use super::session::{AppSession, SessionEnvironment};
 use super::terminal::TerminalEvent;
 use super::trust::{Trust, TrustFileCache};
+use super::workspace_control::{self, CreateRequest};
+use super::workspaces::{live_sessions, read_workspaces};
+use crate::automation::host_caller;
 use crate::clock::now_ms;
+use crate::offline_workspace::TmuxSessionLauncher;
 
 const CONFIG_VERSION: u32 = 1;
 const IDENTITY_FILE: &str = "identity.json";
@@ -58,6 +65,10 @@ const MAX_HELD_BYTES: usize = 8 * 1024 * 1024;
 const TERMINAL_EVENT_QUEUE: usize = 256;
 /// How long a rejected phone gets to read why before the server closes.
 const REJECTION_GRACE_MS: u64 = 1_000;
+/// An MCP request's head; its body has `agent_mcp::MAX_BODY_BYTES`.
+const MAX_HTTP_HEAD_BYTES: usize = 16 * 1024;
+/// How long a client has to send a request's first line, or the rest of it.
+const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const HEARTBEAT_PING: &str = r#"{"type":"ping"}"#;
 const HEARTBEAT_PONG: &str = r#"{"type":"pong"}"#;
 
@@ -350,6 +361,227 @@ fn check_upgrade(shared: &Shared, request: &Request) -> Result<String, &'static 
     Ok(origin.to_owned())
 }
 
+/// One MCP request from an Outside Agent, answered and closed: the route keeps no session.
+fn serve_agent_request(mut stream: TcpStream, shared: &Shared) -> anyhow::Result<()> {
+    let response = match read_http_request(&mut stream) {
+        Ok(request) => agent_mcp::handle(&request, &ServerAgentHost(shared), now_ms()),
+        Err(status) => HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: String::new(),
+        },
+    };
+    write_http_response(&mut stream, &response)
+}
+
+/// The request, or the status that refuses it.
+fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, u16> {
+    let mut reader = HttpReader {
+        stream,
+        deadline: Instant::now() + HTTP_REQUEST_TIMEOUT,
+        bytes: Vec::new(),
+    };
+    let head_end = loop {
+        if let Some(end) = reader
+            .bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+        {
+            break end;
+        }
+        if reader.bytes.len() > MAX_HTTP_HEAD_BYTES {
+            return Err(431);
+        }
+        reader.read_more()?;
+    };
+    let head = std::str::from_utf8(&reader.bytes[..head_end]).map_err(|_| 400u16)?;
+    let mut lines = head.split("\r\n");
+    let method = lines
+        .next()
+        .and_then(|line| line.split(' ').next())
+        .filter(|method| !method.is_empty())
+        .ok_or(400u16)?
+        .to_owned();
+    let mut headers = Vec::new();
+    for line in lines {
+        let (name, value) = line.split_once(':').ok_or(400u16)?;
+        headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
+    }
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    let (transfer_encoding, content_length) =
+        (header("transfer-encoding"), header("content-length"));
+    reader.bytes.drain(..head_end + 4);
+    let body = match transfer_encoding {
+        // A proxy forwards a body it got without a length, as from HTTP/2, in chunks.
+        Some(encoding) if encoding.eq_ignore_ascii_case("chunked") => {
+            if content_length.is_some() {
+                return Err(400);
+            }
+            reader.chunked_body()?
+        }
+        Some(_) => return Err(501),
+        None => {
+            let length = match content_length {
+                None => 0,
+                Some(value) => value.parse::<usize>().map_err(|_| 400u16)?,
+            };
+            if length > agent_mcp::MAX_BODY_BYTES {
+                return Err(413);
+            }
+            reader.fill(length)?;
+            reader.bytes.truncate(length);
+            std::mem::take(&mut reader.bytes)
+        }
+    };
+    Ok(HttpRequest {
+        method,
+        headers,
+        body,
+    })
+}
+
+/// Reads a request off the socket, all of it by one deadline.
+struct HttpReader<'a> {
+    stream: &'a mut TcpStream,
+    deadline: Instant,
+    /// Read and not yet used.
+    bytes: Vec<u8>,
+}
+
+impl HttpReader<'_> {
+    fn read_more(&mut self) -> Result<(), u16> {
+        let left = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or(408u16)?;
+        self.stream
+            .set_read_timeout(Some(left))
+            .map_err(|_| 400u16)?;
+        let mut chunk = [0u8; 8192];
+        match self.stream.read(&mut chunk) {
+            Ok(0) => Err(400),
+            Ok(read) => {
+                self.bytes.extend_from_slice(&chunk[..read]);
+                Ok(())
+            }
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                Err(408)
+            }
+            Err(_) => Err(400),
+        }
+    }
+
+    fn fill(&mut self, length: usize) -> Result<(), u16> {
+        while self.bytes.len() < length {
+            self.read_more()?;
+        }
+        Ok(())
+    }
+
+    fn line(&mut self) -> Result<String, u16> {
+        loop {
+            if let Some(end) = self.bytes.windows(2).position(|pair| pair == b"\r\n") {
+                let line = String::from_utf8(self.bytes[..end].to_vec()).map_err(|_| 400u16)?;
+                self.bytes.drain(..end + 2);
+                return Ok(line);
+            }
+            if self.bytes.len() > MAX_HTTP_HEAD_BYTES {
+                return Err(400);
+            }
+            self.read_more()?;
+        }
+    }
+
+    fn chunked_body(&mut self) -> Result<Vec<u8>, u16> {
+        let mut body = Vec::new();
+        loop {
+            let size_line = self.line()?;
+            // Chunk extensions follow a semicolon; none is used.
+            let size_text = size_line.split(';').next().unwrap_or_default().trim();
+            let size = usize::from_str_radix(size_text, 16).map_err(|_| 400u16)?;
+            if size == 0 {
+                // Trailers, up to the empty line that ends the body.
+                while !self.line()?.is_empty() {}
+                return Ok(body);
+            }
+            if body.len() + size > agent_mcp::MAX_BODY_BYTES {
+                return Err(413);
+            }
+            self.fill(size + 2)?;
+            if &self.bytes[size..size + 2] != b"\r\n" {
+                return Err(400);
+            }
+            body.extend_from_slice(&self.bytes[..size]);
+            self.bytes.drain(..size + 2);
+        }
+    }
+}
+
+fn write_http_response(stream: &mut TcpStream, response: &HttpResponse) -> anyhow::Result<()> {
+    let reason = StatusCode::from_u16(response.status)
+        .ok()
+        .and_then(|status| status.canonical_reason())
+        .unwrap_or("");
+    let mut head = format!("HTTP/1.1 {} {reason}\r\n", response.status);
+    for (name, value) in &response.headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str(&format!(
+        "cache-control: no-store\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        response.body.len()
+    ));
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(response.body.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+/// This host as the MCP route sees it: the desktop's trust and launch files, and its workspaces.
+struct ServerAgentHost<'a>(&'a Shared);
+
+impl AgentHost for ServerAgentHost<'_> {
+    fn trust(&self) -> Trust {
+        self.0.trust()
+    }
+
+    fn launch(&self) -> anyhow::Result<HostLaunch> {
+        HostLaunch::load(&self.0.launch_path)
+    }
+
+    fn base(&self) -> &Path {
+        &self.0.config.base_path
+    }
+
+    fn workspaces(&self) -> Vec<AgentWorkspace> {
+        let sessions = live_sessions(&self.0.config.tmux_socket);
+        let attention = self.0.attention.lock().expect("attention lock poisoned");
+        read_workspaces(&self.0.config.base_path)
+            .iter()
+            .map(|workspace| AgentWorkspace {
+                summary: workspace.summary(&sessions, &attention, &self.0.config.host_name),
+                project_root: workspace.project_root().map(Path::to_path_buf),
+            })
+            .collect()
+    }
+
+    fn create(&self, launch: &HostLaunch, request: &CreateRequest) -> anyhow::Result<String> {
+        let base = &self.0.config.base_path;
+        workspace_control::create(
+            &host_caller(base),
+            launch,
+            request,
+            &mut TmuxSessionLauncher::on_socket(base, &self.0.config.tmux_socket),
+            now_ms(),
+        )
+    }
+}
+
 struct Connection<'a> {
     shared: &'a Shared,
     id: u64,
@@ -380,8 +612,36 @@ enum Flow {
     Close(u16, String),
 }
 
+/// The path a request's first line names, read without taking it off the socket, so a WebSocket
+/// upgrade still finds the whole request. None when it doesn't come in time.
+fn peek_path(stream: &TcpStream) -> std::io::Result<Option<String>> {
+    let deadline = Instant::now() + HTTP_REQUEST_TIMEOUT;
+    let mut buffer = [0u8; 2048];
+    loop {
+        let read = stream.peek(&mut buffer)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        if let Some(end) = buffer[..read].windows(2).position(|pair| pair == b"\r\n") {
+            let line = String::from_utf8_lossy(&buffer[..end]);
+            let target = line.split(' ').nth(1).unwrap_or_default();
+            return Ok(Some(
+                target.split('?').next().unwrap_or_default().to_owned(),
+            ));
+        }
+        if read == buffer.len() || Instant::now() >= deadline {
+            return Ok(None);
+        }
+        // Part of the line is in; peeking again at once would only spin.
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn serve_connection(stream: TcpStream, shared: &Shared) -> anyhow::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    if peek_path(&stream)?.as_deref() == Some(agent_mcp::MCP_PATH) {
+        return serve_agent_request(stream, shared);
+    }
     let config = WebSocketConfig {
         max_message_size: Some(MAX_FRAME_CHARS),
         max_frame_size: Some(MAX_FRAME_CHARS),
@@ -814,5 +1074,66 @@ impl Connection<'_> {
                 .expect("resume lock poisoned")
                 .release(token, now_ms());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+
+    use super::*;
+
+    /// What `read_http_request` makes of `sent`, written by a client that then stays open.
+    fn read_sent(sent: &'static [u8]) -> Result<HttpRequest, u16> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream.write_all(sent).unwrap();
+            stream
+        });
+        let (mut server, _) = listener.accept().unwrap();
+        let _client = client.join().unwrap();
+        read_http_request(&mut server)
+    }
+
+    #[test]
+    fn reads_a_body_by_its_length() {
+        let request = read_sent(
+            b"POST /remote/mcp HTTP/1.1\r\nContent-Length: 5\r\nAuthorization: Bearer x\r\n\r\nhello",
+        )
+        .unwrap();
+
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.body, b"hello");
+        assert!(request
+            .headers
+            .contains(&("authorization".to_owned(), "Bearer x".to_owned())));
+    }
+
+    #[test]
+    fn reads_a_body_a_proxy_sends_in_chunks() {
+        let request = read_sent(
+            b"POST /remote/mcp HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4;x=y\r\n{\"a\"\r\n3\r\n:1}\r\n0\r\n\r\n",
+        )
+        .unwrap();
+
+        assert_eq!(request.body, b"{\"a\":1}");
+    }
+
+    #[test]
+    fn refuses_bodies_it_cannot_take() {
+        assert_eq!(
+            read_sent(b"POST / HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n").err(),
+            Some(413)
+        );
+        assert_eq!(
+            read_sent(b"POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n").err(),
+            Some(501)
+        );
+        assert_eq!(
+            read_sent(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n").err(),
+            Some(400)
+        );
     }
 }

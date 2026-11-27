@@ -1,12 +1,15 @@
-//! The phones a desktop lets reach this host, copied from its trusted-device registry over SSH.
-//! The desktop rewrites the file whenever a phone is added or removed and renews `expiresAt` each
-//! time it connects; once the lease runs out the host trusts no phone from that desktop.
+//! The phones a desktop lets reach this host, copied from its trusted-device registry over SSH,
+//! and the Agent Tokens it lets Outside Agents call this host's MCP route with (ADR 0013).
+//! The desktop rewrites the file whenever a phone or token is added or removed and renews
+//! `expiresAt` each time it connects; once the lease runs out the host trusts no phone and no
+//! token from that desktop.
 
 use std::fs;
 use std::path::Path;
 
 use anyhow::{bail, Context};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use super::crypto::{fingerprint, public_key_from_spki};
 use super::peer::decode_base64;
@@ -14,6 +17,10 @@ use super::resume::DEFAULT_RESUME_WINDOW_MS;
 
 const TRUST_FILE_VERSION: u32 = 1;
 const MAX_TRUST_FILE_BYTES: u64 = 512 * 1024;
+const AGENT_TOKEN_PREFIX: &str = "komla_agent_";
+/// 32 random bytes in unpadded base64url.
+const AGENT_TOKEN_SECRET_CHARS: usize = 43;
+const MAX_ID_CHARS: usize = 128;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,6 +32,31 @@ struct TrustFile {
     #[serde(default)]
     resume_window_ms: Option<u64>,
     devices: Vec<TrustedDeviceRecord>,
+    /// Missing in files from before Agent Tokens reached hosts, which trust none. Each is read on
+    /// its own, so one this host can't use doesn't keep phones' trust from reaching it.
+    #[serde(default)]
+    agent_tokens: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentTokenRecord {
+    id: String,
+    /// Lowercase hex SHA-256 of the whole token; the token itself never leaves the desktop.
+    token_hash: String,
+    project_ids: Vec<String>,
+    /// Milliseconds since the epoch, or null for a token that works until revoked.
+    expires_at: Option<u64>,
+}
+
+/// An Agent Token an Outside Agent may call this host's MCP route with.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AgentToken {
+    pub(crate) id: String,
+    token_hash: [u8; 32],
+    /// The projects it may list and start workspaces in.
+    pub(crate) project_ids: Vec<String>,
+    expires_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +88,7 @@ pub(crate) struct TrustedDevice {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Trust {
     devices: Vec<TrustedDevice>,
+    agent_tokens: Vec<AgentToken>,
     expires_at: u64,
     resume_window_ms: Option<u64>,
 }
@@ -72,8 +105,23 @@ impl Trust {
             .into_iter()
             .map(TrustedDevice::from_record)
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let agent_tokens = file
+            .agent_tokens
+            .into_iter()
+            .filter_map(|value| {
+                let token = serde_json::from_value::<AgentTokenRecord>(value)
+                    .map_err(anyhow::Error::from)
+                    .and_then(AgentToken::from_record);
+                token
+                    .inspect_err(|cause| {
+                        eprintln!("phone trust: skipped an agent token: {cause:#}")
+                    })
+                    .ok()
+            })
+            .collect();
         Ok(Self {
             devices,
+            agent_tokens,
             expires_at: file.expires_at,
             resume_window_ms: file.resume_window_ms,
         })
@@ -113,6 +161,26 @@ impl Trust {
             .iter()
             .find(|device| device.origin == origin)
             .map(|device| device.rp_id.as_str())
+    }
+
+    /// The live Agent Token a bearer value names, unless it or the lease has expired.
+    pub(crate) fn agent_token(&self, bearer: &str, now_ms: u64) -> Option<&AgentToken> {
+        if now_ms >= self.expires_at || !is_agent_token(bearer) {
+            return None;
+        }
+        let hash: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
+        // Every stored hash is compared in full, so timing says nothing about which one matched.
+        let mut found = None;
+        for token in &self.agent_tokens {
+            if same_hash(&token.token_hash, &hash) && found.is_none() {
+                found = Some(token);
+            }
+        }
+        found.filter(|token| {
+            token
+                .expires_at
+                .is_none_or(|expires_at| now_ms < expires_at)
+        })
     }
 
     /// Browser origins a WebSocket upgrade may come from: those of the trusted phones.
@@ -181,6 +249,72 @@ fn is_allowed_origin(origin: &str) -> bool {
         return false;
     };
     !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// `komla_agent_` and 43 base64url characters, as the desktop makes them.
+fn is_agent_token(value: &str) -> bool {
+    value
+        .strip_prefix(AGENT_TOKEN_PREFIX)
+        .is_some_and(|secret| {
+            secret.len() == AGENT_TOKEN_SECRET_CHARS
+                && secret
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+}
+
+fn same_hash(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    left.iter()
+        .zip(right)
+        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
+}
+
+/// The lowercase hex SHA-256 the desktop stores for a token.
+#[cfg(test)]
+pub(crate) fn hash_agent_token(token: &str) -> String {
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn decode_hash(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    let mut hash = [0u8; 32];
+    for (index, byte) in hash.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(hash)
+}
+
+fn is_id(value: &str) -> bool {
+    !value.is_empty() && value.chars().count() <= MAX_ID_CHARS
+}
+
+impl AgentToken {
+    fn from_record(record: AgentTokenRecord) -> anyhow::Result<Self> {
+        let token_hash =
+            decode_hash(&record.token_hash).context("agent token hash is not lowercase hex")?;
+        if !is_id(&record.id)
+            || record.project_ids.is_empty()
+            || !record.project_ids.iter().all(|id| is_id(id))
+        {
+            bail!("agent token record is incomplete");
+        }
+        Ok(Self {
+            id: record.id,
+            token_hash,
+            project_ids: record.project_ids,
+            expires_at: record.expires_at,
+        })
+    }
 }
 
 impl TrustedDevice {
@@ -341,6 +475,78 @@ pub(crate) mod tests {
             .is_some());
         fs::remove_file(&path).unwrap();
         assert_eq!(cache.current(&path), Trust::default());
+    }
+
+    const TOKEN: &str = "komla_agent_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    fn token_record(token: &str, expires_at: Option<u64>) -> serde_json::Value {
+        serde_json::json!({
+            "id": "tok-1",
+            "tokenHash": hash_agent_token(token),
+            "projectIds": ["p-app"],
+            "expiresAt": expires_at,
+        })
+    }
+
+    fn trust_with_tokens(tokens: Vec<serde_json::Value>, expires_at: u64) -> Trust {
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&trust_json(Vec::new(), expires_at)).unwrap();
+        file["agentTokens"] = serde_json::Value::Array(tokens);
+        Trust::parse(file.to_string().as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn finds_an_agent_token_by_its_hash_until_it_or_the_lease_expires() {
+        let trust = trust_with_tokens(vec![token_record(TOKEN, Some(500))], 1_000);
+
+        let found = trust.agent_token(TOKEN, 499).unwrap();
+        assert_eq!(found.id, "tok-1");
+        assert_eq!(found.project_ids, vec!["p-app".to_owned()]);
+        // The token's own expiry, then the desktop's lease, each end it.
+        assert!(trust.agent_token(TOKEN, 500).is_none());
+        let forever = trust_with_tokens(vec![token_record(TOKEN, None)], 1_000);
+        assert!(forever.agent_token(TOKEN, 999).is_some());
+        assert!(forever.agent_token(TOKEN, 1_000).is_none());
+    }
+
+    #[test]
+    fn refuses_tokens_it_was_not_given_and_malformed_ones() {
+        let trust = trust_with_tokens(vec![token_record(TOKEN, None)], u64::MAX);
+        let other = "komla_agent_BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+        assert!(trust.agent_token(other, 0).is_none());
+        assert!(trust.agent_token("", 0).is_none());
+        assert!(trust.agent_token(&format!("Bearer {TOKEN}"), 0).is_none());
+        assert!(trust.agent_token(&format!("{TOKEN}A"), 0).is_none());
+        // A trust file from before Agent Tokens reached hosts has none.
+        assert!(Trust::parse(&trust_json(Vec::new(), u64::MAX))
+            .unwrap()
+            .agent_token(TOKEN, 0)
+            .is_none());
+    }
+
+    #[test]
+    fn skips_agent_token_records_that_do_not_hold_together() {
+        let mut short_hash = token_record(TOKEN, None);
+        short_hash["tokenHash"] = serde_json::Value::String("ab".to_owned());
+        let mut upper_hash = token_record(TOKEN, None);
+        upper_hash["tokenHash"] =
+            serde_json::Value::String(hash_agent_token(TOKEN).to_ascii_uppercase());
+        let mut no_projects = token_record(TOKEN, None);
+        no_projects["projectIds"] = serde_json::json!([]);
+        let mut extra = token_record(TOKEN, None);
+        extra["credentialId"] = serde_json::Value::String("passkey".to_owned());
+
+        let other = format!("komla_agent_{}", "Z".repeat(43));
+        for record in [short_hash, upper_hash, no_projects, extra] {
+            let mut file: serde_json::Value =
+                serde_json::from_slice(&trust_json(Vec::new(), u64::MAX)).unwrap();
+            file["agentTokens"] = serde_json::json!([record, token_record(&other, None)]);
+            let trust = Trust::parse(file.to_string().as_bytes()).unwrap();
+            assert!(trust.agent_token(TOKEN, 0).is_none());
+            // The rest of the file still holds.
+            assert!(trust.agent_token(&other, 0).is_some());
+        }
     }
 
     #[test]

@@ -394,6 +394,22 @@ export function RemoteTab() {
     pairingSince === null
       ? null
       : (devices.find((device) => Date.parse(device.createdAt) >= pairingSince - 1000) ?? null);
+  // The Where-agents-start host checks Agent Tokens itself, on its phone server's port.
+  const agentHostAccess = hostAccess.statuses.find(
+    (status) => status.hostId === config?.agentLaunchDefaultSshHostId
+  );
+  const hostMcp =
+    server &&
+    agentHostAccess?.url &&
+    // A pending host hasn't got the latest tokens; the desktop's address takes them now.
+    agentHostAccess.state === 'ready'
+      ? {
+          hostName: agentHostAccess.hostName,
+          url: agentHostAccess.url
+            .replace(/^wss:/, 'https:')
+            .replace(/\/remote\/ws$/, '/remote/mcp'),
+        }
+      : null;
   const hostsWithoutAccess = server ? hostAccess.statuses.filter((status) => !status.enabled) : [];
 
   return (
@@ -681,6 +697,7 @@ export function RemoteTab() {
         mcpUrl={server ? `${server.httpOrigin}/remote/mcp` : null}
         remoteOn={Boolean(server) || retrying}
         localAccess={localAccess}
+        hostMcp={hostMcp}
       />
 
       {tailscaleInstalled && !needsSignIn && (

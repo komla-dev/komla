@@ -1,4 +1,6 @@
+import { readFileSync } from 'fs';
 import { createServer, type Server } from 'http';
+import { join } from 'path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -127,6 +129,20 @@ describe('the Outside Agent MCP route', () => {
       'list_workspaces',
       'workspace_status',
     ]);
+    await client.close();
+  });
+
+  it("offers the very tools an SSH host's route offers", async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    // The companion on an SSH host serves the same route with this list (ADR 0013).
+    const hostTools = JSON.parse(
+      readFileSync(
+        join(__dirname, '../../../native/src/remote_control/agent_mcp_tools.json'),
+        'utf8'
+      )
+    ) as unknown;
+    expect(tools).toEqual(hostTools);
     await client.close();
   });
 

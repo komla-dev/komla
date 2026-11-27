@@ -1,7 +1,9 @@
 // What a phone may start on an SSH host while it talks to the host directly (ADR 0005): the
 // projects whose workspaces would go there and each agent's POSIX launch commands. The desktop
 // writes it to the host as `launch.json` next to the phone trust file. Only projects with a workspace
-// on that host go there, and the host offers only those whose repository it already has.
+// on that host go there, and the host offers only those whose repository it already has. It also
+// says which agents and modes Outside Agents may start there (ADR 0013), by the same rules that
+// limit agents on this computer.
 
 import {
   encodedJsonBytes,
@@ -12,6 +14,12 @@ import {
 } from '@komla/remote-protocol';
 
 import { MAX_NAME_CHARS } from '../../../packages/remote-protocol/src/app/frames';
+import { canStartWithPrompt } from '../../shared/lib/agent-preset-prompt';
+import {
+  agentsMayLaunch,
+  pinnedAgentLaunch,
+  pinnedAgentLaunchPolicy,
+} from '../../shared/lib/launch-mode-permissions';
 import { projectColorHex } from '../../shared/lib/project-color';
 import { resolveBranchPrefix } from '../../shared/lib/project-git-defaults';
 import { projectRepoPath } from '../../shared/lib/project-repo-path';
@@ -22,6 +30,7 @@ import { agentPresetService } from './agent-preset.service';
 import { configService } from './config.service';
 import { gitService } from './git.service';
 import { projectService } from './project.service';
+import { sshHostService } from './ssh-host.service';
 import { sshWorkspaceService } from './ssh-workspace.service';
 
 import type { AgentPreset, ActivePresetEntry } from '../../shared/types/agent-preset';
@@ -97,6 +106,51 @@ interface HostLaunchPreset {
   }>;
 }
 
+interface AgentLaunchChoice {
+  presetId: string;
+  launchModeId?: string;
+}
+
+/**
+ * What an Outside Agent may start on the host: each agent without a mode, and each mode agents
+ * may start where the host is, isolated or not, as `agent.launch` decides on this computer. The
+ * pinned agent and mode start when the agent names none.
+ */
+function hostAgentLaunch(
+  hostId: string,
+  presets: HostLaunchPreset[]
+): { default?: AgentLaunchChoice; allowed: AgentLaunchChoice[] } {
+  const pin = pinnedAgentLaunch(configService.get());
+  const isolated = sshHostService.get(hostId)?.isolated === true;
+  const allowed: AgentLaunchChoice[] = [];
+  let pinned: AgentLaunchChoice | undefined;
+  for (const hostPreset of presets) {
+    const preset = agentPresetService.get(hostPreset.summary.id);
+    // An Outside Agent always sends a prompt.
+    if (!preset || !canStartWithPrompt(preset)) continue;
+    if (hostPreset.launches.some((launch) => launch.launchModeId === undefined)) {
+      allowed.push({ presetId: preset.id });
+    }
+    for (const launch of hostPreset.launches) {
+      const mode = preset.launchModes.find((entry) => entry.id === launch.launchModeId);
+      if (!mode) continue;
+      if (agentsMayLaunch(pinnedAgentLaunchPolicy(pin, preset.id, mode), isolated)) {
+        allowed.push({ presetId: preset.id, launchModeId: mode.id });
+      }
+    }
+    if (preset.id === pin.presetId) {
+      const pinnedMode = allowed.find(
+        (choice) => choice.presetId === preset.id && choice.launchModeId === pin.modeId
+      );
+      pinned = {
+        presetId: preset.id,
+        ...(pinnedMode?.launchModeId ? { launchModeId: pinnedMode.launchModeId } : {}),
+      };
+    }
+  }
+  return { ...(pinned ? { default: pinned } : {}), allowed };
+}
+
 /** Which projects have a workspace on an SSH host; the workspace service fills it in. */
 const workspaces: { projectIdsOnHost: (hostId: string) => ReadonlySet<string> } = {
   projectIdsOnHost: () => new Set(),
@@ -112,6 +166,7 @@ export interface HostLaunchFile {
   defaultLaunchModeId?: string;
   projects: HostLaunchProject[];
   presets: HostLaunchPreset[];
+  agentLaunch: ReturnType<typeof hostAgentLaunch>;
 }
 
 async function hostProject(
@@ -222,6 +277,7 @@ export async function buildHostLaunchFile(hostId: string, basePath: string): Pro
     ...(defaultLaunchModeId ? { defaultLaunchModeId } : {}),
     projects: hostProjects.map((project, index) => ({ ...project, summary: summaries[index]! })),
     presets: hostPresets,
+    agentLaunch: hostAgentLaunch(hostId, hostPresets),
   };
   return JSON.stringify(file);
 }

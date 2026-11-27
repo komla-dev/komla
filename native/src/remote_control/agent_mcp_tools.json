@@ -1,0 +1,108 @@
+[
+  {
+    "name": "list_projects",
+    "description": "List the Komla projects you may start workspaces in, by id and name.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "list_workspaces",
+    "description": "List the Komla workspaces in your projects: each one's id, name, project, branch, whether its agent is working, and the attention it shows, such as input-required when its agent waits for the user.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeTrashed": {
+          "description": "Also list workspaces in the Trash.",
+          "type": "boolean"
+        }
+      },
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "launch_workspace",
+    "description": "Start an AI coding agent in a new Komla workspace: its own branch and working directory, branched from the project's base branch, with your prompt as its first message. The user sees it in Komla and can steer it there.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The project, by an id or name list_projects gives."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "description": "The task for the agent."
+        },
+        "name": {
+          "description": "A 2-3 word title for the workspace.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "description": "One sentence summary.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "branch": {
+          "description": "A branch name, such as \"fix-login-redirect\". Komla names one otherwise. When the SSH host already has the name, a number goes on its end: workspace_status gives the branch the workspace got.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "agent": {
+          "description": "The agent to start, by name, such as Claude Code. Without it, the user's pick.",
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "description": "One of that agent's launch modes, by name. Only modes the user lets agents start work.",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "project",
+        "prompt"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "workspace_status",
+    "description": "One workspace's state, as list_workspaces gives it: whether its agent is working, and the attention it shows, such as turn-complete once its agent finished.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The id launch_workspace or list_workspaces gave."
+        }
+      },
+      "required": [
+        "workspaceId"
+      ],
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  }
+]

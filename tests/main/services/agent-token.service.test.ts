@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -240,6 +241,27 @@ describe('AgentTokenService', () => {
     devices = [{ credentialId: 'passkey-2' }];
     for (const listener of deviceListeners) listener();
     expect(tokens.authenticate(token)).toBe(null);
+  });
+
+  it('shares with an SSH host what checks a live token there, and no label or secret', () => {
+    const tokens = service();
+    const { token, summary } = create(tokens);
+    const forever = create(tokens, { lifetimeDays: null });
+    create(tokens);
+    now += 31 * DAY_MS;
+
+    const shared = tokens.hostShares();
+
+    expect(shared).toEqual([
+      {
+        id: forever.summary.id,
+        tokenHash: createHash('sha256').update(forever.token).digest('hex'),
+        projectIds: ['web'],
+        expiresAt: null,
+      },
+    ]);
+    expect(JSON.stringify(shared)).not.toContain(token);
+    expect(JSON.stringify(shared)).not.toContain(summary.label);
   });
 
   it('validates what the approval asks for', () => {

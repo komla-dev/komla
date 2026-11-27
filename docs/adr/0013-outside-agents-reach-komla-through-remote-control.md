@@ -65,6 +65,25 @@ route is only another adapter.
   asleep. The host's phone server (ADR 0005) can already create workspaces without a desktop. It
   could later serve the same route, with token hashes and scopes copied to `trust.json` under its
   lease. That is a later decision.
+- **The Where-agents-start host serves the route too** (amended 2026-11). A bot should keep
+  starting workspaces while the laptop is shut, and agents already start on that host. Its phone
+  server (ADR 0005) answers `/remote/mcp` on its own Tailscale Serve port with the same four tools;
+  the desktop's tests hold the host's tool list to its own. The desktop writes each live token's
+  hash, projects and expiry, never its label or the token, into that host's `trust.json`, and
+  into no other host's, and writes what Outside Agents may start there into `launch.json`: each
+  agent's modes that agents may start where the host is, isolated or not, and the agent and mode
+  pinned for agent launches, worked out by the rules the desktop's operations use, so the host
+  doesn't keep its own copy of them. The host sees a token's projects by their folders on it,
+  lists only workspaces cut there, leaving out a project whose folder another shares, and starts
+  workspaces through the code a phone uses. A tightened launch rule reaches a connected host at
+  once, like a revoke.
+  Revocation is bounded by the phones' 7-day lease: a revoke, a new token or a changed Where agents
+  start reaches the host at once when Komla can connect to it, and otherwise the next time it does,
+  and the host stops taking every token when the lease runs out. Settings › Remote gives a token
+  limited to SSH hosts the host's address; the desktop's keeps working. A token's last use there
+  isn't recorded. Phones still reach the host as before, through the page their browser cached
+  from the desktop; serving that page from the host would need passkeys bound to the host's name,
+  which is a later decision.
 
 ## Considered options
 
