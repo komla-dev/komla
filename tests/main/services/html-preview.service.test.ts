@@ -26,6 +26,7 @@ const { protocol } = (await import('electron')) as unknown as {
 import {
   HtmlPreviewService,
   HTML_PREVIEW_PROTOCOL_SCHEME,
+  MAX_STREAM_SESSIONS,
 } from '../../../src/main/services/html-preview.service';
 
 type ProtocolHandler = (request: Request) => Promise<Response>;
@@ -116,6 +117,110 @@ describe('HtmlPreviewService', () => {
       } finally {
         rmSync(hiddenParent, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('createStreamPreviewUrl', () => {
+    const bytes = Buffer.from('0123456789');
+    function streamedFile(chunkBytes = 3) {
+      const read = vi.fn(async (start: number, length: number) =>
+        bytes.subarray(start, start + length)
+      );
+      return { size: bytes.length, mimeType: 'video/mp4', chunkBytes, read };
+    }
+
+    it('serves the whole file a chunk at a time', async () => {
+      const { service, handler } = makeServiceWithHandler();
+      const file = streamedFile();
+      const url = service.createStreamPreviewUrl('clip.mp4', file);
+      const response = await handler(new Request(url));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe('video/mp4');
+      expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+      expect(response.headers.get('Content-Length')).toBe('10');
+      expect(await response.text()).toBe('0123456789');
+      expect(file.read.mock.calls).toEqual([
+        [0, 3],
+        [3, 3],
+        [6, 3],
+        [9, 1],
+      ]);
+    });
+
+    it('reads only the requested range', async () => {
+      const { service, handler } = makeServiceWithHandler();
+      const file = streamedFile(100);
+      const url = service.createStreamPreviewUrl('clip.mp4', file);
+      const response = await handler(new Request(url, { headers: { range: 'bytes=4-' } }));
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get('Content-Range')).toBe('bytes 4-9/10');
+      expect(await response.text()).toBe('456789');
+      expect(file.read.mock.calls).toEqual([[4, 6]]);
+    });
+
+    it('reads nothing for a HEAD request or an unsatisfiable range', async () => {
+      const { service, handler } = makeServiceWithHandler();
+      const file = streamedFile();
+      const url = service.createStreamPreviewUrl('clip.mp4', file);
+
+      expect((await handler(new Request(url, { method: 'HEAD' }))).status).toBe(200);
+      const outOfRange = await handler(new Request(url, { headers: { range: 'bytes=20-30' } }));
+      expect(outOfRange.status).toBe(416);
+      expect(file.read).not.toHaveBeenCalled();
+    });
+
+    it('serves only its own file', async () => {
+      const { service, handler } = makeServiceWithHandler();
+      const url = service.createStreamPreviewUrl('clip.mp4', streamedFile());
+      const response = await handler(new Request(urlFor(tokenFromUrl(url), 'other.mp4')));
+      expect(response.status).toBe(404);
+    });
+
+    it('keeps a stream past the hour other previews last', async () => {
+      vi.useFakeTimers();
+      try {
+        const { service, handler } = makeServiceWithHandler();
+        const url = service.createStreamPreviewUrl('clip.mp4', streamedFile());
+        vi.advanceTimersByTime(5 * 60 * 60 * 1000);
+        expect((await handler(new Request(url, { method: 'HEAD' }))).status).toBe(200);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops the stream played least recently past its limit', async () => {
+      vi.useFakeTimers();
+      try {
+        const { service, handler } = makeServiceWithHandler();
+        const urls = Array.from({ length: MAX_STREAM_SESSIONS }, (_, index) => {
+          vi.advanceTimersByTime(1000);
+          return service.createStreamPreviewUrl(`clip-${index}.mp4`, streamedFile());
+        });
+        // The first is played again, so the second is now the least recent.
+        vi.advanceTimersByTime(1000);
+        await handler(new Request(urls[0], { method: 'HEAD' }));
+        vi.advanceTimersByTime(1000);
+        const newest = service.createStreamPreviewUrl('new.mp4', streamedFile());
+
+        const status = async (url: string) =>
+          (await handler(new Request(url, { method: 'HEAD' }))).status;
+        expect(await status(urls[0])).toBe(200);
+        expect(await status(urls[1])).toBe(404);
+        expect(await status(urls[2])).toBe(200);
+        expect(await status(newest)).toBe(200);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('gives each view a stream of its own', async () => {
+      const { service, handler } = makeServiceWithHandler();
+      const first = service.createStreamPreviewUrl('clip.mp4', streamedFile());
+      service.createStreamPreviewUrl('clip.mp4', streamedFile());
+      service.createStreamPreviewUrl('clip.mp4', streamedFile());
+      expect((await handler(new Request(first, { method: 'HEAD' }))).status).toBe(200);
     });
   });
 

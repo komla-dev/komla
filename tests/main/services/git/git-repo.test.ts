@@ -662,54 +662,7 @@ describe('GitRepoService', () => {
     });
   });
 
-  describe('readMediaFileContent', () => {
-    it('reads audio files as base64 with mime type and kind', async () => {
-      const { gitRepoService, readFile, stat } = await setup();
-      stat.mockResolvedValue({ size: 10, mtimeMs: 123 });
-      readFile.mockResolvedValue(Buffer.from('audio-data'));
-
-      const result = await gitRepoService.readMediaFileContent('/repo', 'sound.mp3');
-
-      expect(readFile).toHaveBeenCalledWith(expect.stringMatching(/[\\/]repo[\\/]sound\.mp3$/));
-      expect(result).toEqual({
-        data: Buffer.from('audio-data').toString('base64'),
-        mimeType: 'audio/mpeg',
-        kind: 'audio',
-      });
-    });
-
-    it('reads video files as base64 with mime type and kind', async () => {
-      const { gitRepoService, readFile, stat } = await setup();
-      stat.mockResolvedValue({ size: 10, mtimeMs: 123 });
-      readFile.mockResolvedValue(Buffer.from('video-data'));
-
-      const result = await gitRepoService.readMediaFileContent('/repo', 'clip.webm');
-
-      expect(result).toEqual({
-        data: Buffer.from('video-data').toString('base64'),
-        mimeType: 'video/webm',
-        kind: 'video',
-      });
-    });
-
-    it('rejects non-media files', async () => {
-      const { gitRepoService } = await setup();
-
-      await expect(gitRepoService.readMediaFileContent('/repo', 'notes.txt')).rejects.toThrow(
-        'Not a media file'
-      );
-    });
-
-    it('rejects media files larger than the IPC cap', async () => {
-      const { gitRepoService, readFile, stat } = await setup();
-      stat.mockResolvedValue({ size: 50 * 1024 * 1024 + 1, mtimeMs: 123 });
-
-      await expect(gitRepoService.readMediaFileContent('/repo', 'clip.mp4')).rejects.toThrow(
-        'Media file too large'
-      );
-      expect(readFile).not.toHaveBeenCalled();
-    });
-
+  describe('getMediaFileMetadata', () => {
     it('returns media metadata without reading file content', async () => {
       const { gitRepoService, readFile, stat } = await setup();
       stat.mockResolvedValue({ size: 1234, mtimeMs: 5678 });

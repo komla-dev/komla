@@ -13,13 +13,6 @@ import { isBrowserPreviewableFile, isUnsupportedBinaryFile } from '../../../../s
 
 export type MediaKind = 'audio' | 'video';
 
-/** A video or audio file's playable data, read only once the user asks for it. */
-export type MediaPreview =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'loaded'; data: string; mimeType: string; kind: MediaKind }
-  | { status: 'error'; message: string };
-
 /** What a read found. Only text can be edited; the others show from what they were read as. */
 export type BufferContent =
   /** `savedText` is the disk's text, or null for edits to a file gone from disk. */
@@ -27,11 +20,10 @@ export type BufferContent =
   | { kind: 'image'; data: string; mimeType: string }
   | {
       kind: 'media';
-      mimeType: string;
       mediaKind: MediaKind;
-      size: number;
+      /** Where it streams from, so a large one plays without being read whole first. */
+      url: string;
       diskToken: string;
-      preview: MediaPreview;
     }
   /** A PDF or a file with no preview, known by its size and modification time. */
   | { kind: 'binary'; diskToken: string };
@@ -67,17 +59,11 @@ export type BufferReadResult =
   | { kind: 'missing' }
   | { kind: 'error'; message: string };
 
-export type MediaPreviewReadResult =
-  | { ok: true; data: string; mimeType: string; kind: MediaKind }
-  | { ok: false; message: string };
-
 export type EditorBufferEvent =
   | { type: 'open'; readId: number; filePath: string }
   | { type: 'reload'; readId: number; filePath: string }
   | { type: 'read'; readId: number; result: BufferReadResult }
   | { type: 'reset'; readId: number }
-  | { type: 'media-preview-start'; readId: number }
-  | { type: 'media-preview-read'; readId: number; result: MediaPreviewReadResult }
   /** The user changed the text. */
   | { type: 'edit'; text: string }
   | { type: 'set-dirty'; dirty: boolean }
@@ -130,12 +116,6 @@ function applyRead(
   return { ...state, view, edits };
 }
 
-function withMediaPreview(state: EditorBufferState, preview: MediaPreview): EditorBufferState {
-  const { view } = state;
-  if (view.status !== 'loaded' || view.content.kind !== 'media') return state;
-  return withView(state, { ...view, content: { ...view.content, preview } });
-}
-
 function applyReload(
   state: EditorBufferState,
   readId: number,
@@ -149,12 +129,6 @@ function applyReload(
     // Reloading answers a conflict: the disk's version replaces the edits.
     edits: state.edits === 'conflict' ? 'dirty' : state.edits,
   };
-}
-
-function mediaPreviewOf(result: MediaPreviewReadResult): MediaPreview {
-  return result.ok
-    ? { status: 'loaded', data: result.data, mimeType: result.mimeType, kind: result.kind }
-    : { status: 'error', message: result.message };
 }
 
 function applyEdit(state: EditorBufferState, text: string): EditorBufferState {
@@ -239,12 +213,6 @@ export function editorBufferReducer(
       if (event.readId !== state.read.id || !filePath) return state;
       return applyRead(state, filePath, event.result);
     }
-    case 'media-preview-start':
-      if (event.readId !== state.read.id) return state;
-      return withMediaPreview(state, { status: 'loading' });
-    case 'media-preview-read':
-      if (event.readId !== state.read.id) return state;
-      return withMediaPreview(state, mediaPreviewOf(event.result));
     case 'edit':
       return applyEdit(state, event.text);
     case 'set-dirty':
@@ -268,7 +236,6 @@ export function editorBufferFields(state: EditorBufferState) {
   const text = content?.kind === 'text' ? content : null;
   const image = content?.kind === 'image' ? content : null;
   const media = content?.kind === 'media' ? content : null;
-  const preview = media?.preview.status === 'loaded' ? media.preview : null;
   return {
     filePath,
     fileContent: text?.text ?? null,
@@ -290,12 +257,8 @@ export function editorBufferFields(state: EditorBufferState) {
     imageData: image?.data ?? null,
     imageMimeType: image?.mimeType ?? null,
     isMedia: media !== null,
-    mediaData: preview?.data ?? null,
-    mediaMimeType: preview?.mimeType ?? media?.mimeType ?? null,
-    mediaKind: preview?.kind ?? media?.mediaKind ?? null,
-    mediaSize: media?.size ?? null,
-    mediaPreviewLoading: media?.preview.status === 'loading',
-    mediaPreviewError: media?.preview.status === 'error' ? media.preview.message : null,
+    mediaUrl: media?.url ?? null,
+    mediaKind: media?.mediaKind ?? null,
   };
 }
 

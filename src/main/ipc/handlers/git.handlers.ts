@@ -876,18 +876,6 @@ export function registerGitHandlers(): void {
   );
 
   handleIpc(
-    IPC.GIT_READ_MEDIA_FILE,
-    async (
-      _,
-      [dirPath, filePath]
-    ): Promise<{ data: string; mimeType: string; kind: 'audio' | 'video' }> => {
-      assertLocalGitPath(dirPath);
-      assertSafeRelativePath(dirPath, filePath, 'filePath');
-      return gitService.readMediaFileContent(dirPath, filePath);
-    }
-  );
-
-  handleIpc(
     IPC.GIT_RESTORE_FILE,
     async (_, [worktreePath, filePath, status, oldPath]): Promise<void> => {
       assertLocalGitPath(worktreePath);

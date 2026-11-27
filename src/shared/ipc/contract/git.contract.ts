@@ -300,11 +300,6 @@ export const gitContract = {
     size: number;
     mtimeMs: number;
   }>(),
-  [IPC.GIT_READ_MEDIA_FILE]: invoke(readFileArgsSchema).returns<{
-    data: string;
-    mimeType: string;
-    kind: 'audio' | 'video';
-  }>(),
   [IPC.GIT_RESTORE_FILE]: invoke(restoreFileArgsSchema).returns<void>(),
   [IPC.GIT_DISCARD_ALL_CHANGES]: invoke(worktreePathArgsSchema).returns<{
     success: boolean;

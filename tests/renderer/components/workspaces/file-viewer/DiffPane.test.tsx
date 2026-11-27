@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DiffPane } from '../../../../../src/renderer/components/workspaces/file-viewer/DiffPane';
@@ -107,41 +107,32 @@ vi.mock('../../../../../src/renderer/hooks/useKomlaEditorTheme', () => ({
 
 vi.mock('../../../../../src/renderer/components/workspaces/file-viewer/MediaPane', () => ({
   MediaPane: ({
-    data,
-    mimeType,
+    url,
     kind,
     fileName,
-    fileSize,
     loading,
     error,
-    onLoadPreview,
   }: {
-    data: string | null;
-    mimeType: string;
+    url: string | null;
     kind: 'audio' | 'video';
     fileName: string;
-    fileSize?: number | null;
     loading?: boolean;
     error?: string | null;
-    onLoadPreview?: () => void;
   }) => (
     <div>
       <div>Media Pane</div>
       <div>{fileName}</div>
-      <div>{mimeType}</div>
       <div>{kind}</div>
-      <div>{fileSize}</div>
-      <div>{data}</div>
+      <div>{url}</div>
       <div>{error}</div>
-      <button type="button" disabled={loading || !onLoadPreview} onClick={onLoadPreview}>
-        Load Preview
-      </button>
+      {loading && <div>Loading media</div>}
     </div>
   ),
 }));
 
 const baseProps = {
   workingDirectory: '/repo',
+  workspaceId: 'ws-1',
   viewMode: 'split' as const,
   selectedFile: 'demo.mp4',
   loading: false,
@@ -210,43 +201,37 @@ describe('DiffPane', () => {
     Object.defineProperty(window, 'api', {
       configurable: true,
       value: {
-        getMediaFileMetadata: vi.fn().mockResolvedValue({
-          mimeType: 'video/mp4',
-          kind: 'video',
-          size: 1234,
-          mtimeMs: 1,
-        }),
-        readMediaFile: vi.fn().mockResolvedValue({
-          data: 'video-data',
-          mimeType: 'video/mp4',
-          kind: 'video',
-        }),
+        getViewerPreviewUrl: vi.fn().mockResolvedValue('komla-preview://t/demo.mp4'),
       },
     });
   });
 
-  it('shows the current video file for binary video diffs', async () => {
+  it('streams the current video file for binary video diffs', async () => {
     render(<DiffPane {...baseProps} fileContent={binaryDiff()} />);
 
     expect(await screen.findByText('Media Pane')).toBeInTheDocument();
     expect(screen.getByText('demo.mp4')).toBeInTheDocument();
-    expect(await screen.findByText('video/mp4')).toBeInTheDocument();
-
-    const loadButton = screen.getByRole('button', { name: 'Load Preview' });
-    await waitFor(() => expect(loadButton).not.toBeDisabled());
-    fireEvent.click(loadButton);
-
-    expect(await screen.findByText('video-data')).toBeInTheDocument();
-    expect(window.api.getMediaFileMetadata).toHaveBeenCalledWith('/repo', 'demo.mp4');
-    expect(window.api.readMediaFile).toHaveBeenCalledWith('/repo', 'demo.mp4');
+    expect(screen.getByText('video')).toBeInTheDocument();
+    expect(await screen.findByText('komla-preview://t/demo.mp4')).toBeInTheDocument();
+    expect(window.api.getViewerPreviewUrl).toHaveBeenCalledWith('ws-1', null, {
+      kind: 'workspace',
+      filePath: 'demo.mp4',
+    });
     expect(screen.queryByText('Binary file changed')).not.toBeInTheDocument();
+  });
+
+  it('says why a video diff could not stream', async () => {
+    vi.mocked(window.api.getViewerPreviewUrl).mockRejectedValue(new Error('host unreachable'));
+    render(<DiffPane {...baseProps} fileContent={binaryDiff()} />);
+
+    expect(await screen.findByText('host unreachable')).toBeInTheDocument();
   });
 
   it('keeps the binary placeholder for deleted video files', () => {
     render(<DiffPane {...baseProps} fileContent={binaryDiff({ status: 'deleted' })} />);
 
     expect(screen.getByText('Binary file changed')).toBeInTheDocument();
-    expect(window.api.getMediaFileMetadata).not.toHaveBeenCalled();
+    expect(window.api.getViewerPreviewUrl).not.toHaveBeenCalled();
   });
 
   it('keeps the binary placeholder when working-tree media previews are disabled', () => {
@@ -259,7 +244,7 @@ describe('DiffPane', () => {
     );
 
     expect(screen.getByText('Binary file changed')).toBeInTheDocument();
-    expect(window.api.getMediaFileMetadata).not.toHaveBeenCalled();
+    expect(window.api.getViewerPreviewUrl).not.toHaveBeenCalled();
   });
 
   it('makes text diffs read-only only when requested', () => {
@@ -404,15 +389,13 @@ describe('DiffPane', () => {
     expect(screen.getByText('Diff Editor')).toHaveAttribute('data-inline-breakpoint', '500');
   });
 
-  it('ignores stale preview loads after switching media files', async () => {
-    const preview = deferred<{ data: string; mimeType: string; kind: 'video' }>();
-    vi.mocked(window.api.readMediaFile).mockReturnValue(preview.promise);
+  it('ignores stale stream URLs after switching media files', async () => {
+    const preview = deferred<string>();
+    vi.mocked(window.api.getViewerPreviewUrl)
+      .mockReturnValueOnce(preview.promise)
+      .mockReturnValueOnce(new Promise(() => {}));
 
     const { rerender } = render(<DiffPane {...baseProps} fileContent={binaryDiff()} />);
-
-    const loadButton = screen.getByRole('button', { name: 'Load Preview' });
-    await waitFor(() => expect(loadButton).not.toBeDisabled());
-    fireEvent.click(loadButton);
 
     rerender(
       <DiffPane
@@ -423,11 +406,11 @@ describe('DiffPane', () => {
     );
 
     await act(async () => {
-      preview.resolve({ data: 'stale-video-data', mimeType: 'video/mp4', kind: 'video' });
+      preview.resolve('komla-preview://t/stale.mp4');
       await preview.promise;
     });
 
     expect(screen.getByText('other.webm')).toBeInTheDocument();
-    expect(screen.queryByText('stale-video-data')).not.toBeInTheDocument();
+    expect(screen.queryByText('komla-preview://t/stale.mp4')).not.toBeInTheDocument();
   });
 });

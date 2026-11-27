@@ -536,13 +536,8 @@ export function FileViewerMainPane(props: FileViewerMainPaneProps) {
               imageData={state.editor.imageData}
               imageMimeType={state.editor.imageMimeType}
               isMedia={state.editor.isMedia}
-              mediaData={state.editor.mediaData}
-              mediaMimeType={state.editor.mediaMimeType}
+              mediaUrl={state.editor.mediaUrl}
               mediaKind={state.editor.mediaKind}
-              mediaSize={state.editor.mediaSize}
-              mediaPreviewLoading={state.editor.mediaPreviewLoading}
-              mediaPreviewError={state.editor.mediaPreviewError}
-              onLoadMediaPreview={() => void state.editor.loadMediaPreview()}
               // Diff props
               {...contentAreaProps}
               hideUnchangedRegions={state.diff.hideUnchangedRegions}

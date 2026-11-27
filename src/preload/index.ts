@@ -1211,12 +1211,6 @@ const api = {
   ): Promise<{ mimeType: string; kind: 'audio' | 'video'; size: number; mtimeMs: number }> =>
     ipcRenderer.invoke(IPC.GIT_GET_MEDIA_FILE_METADATA, dirPath, filePath),
 
-  readMediaFile: (
-    dirPath: string,
-    filePath: string
-  ): Promise<{ data: string; mimeType: string; kind: 'audio' | 'video' }> =>
-    ipcRenderer.invoke(IPC.GIT_READ_MEDIA_FILE, dirPath, filePath),
-
   restoreFile: (
     worktreePath: string,
     filePath: string,

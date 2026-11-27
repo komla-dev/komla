@@ -315,13 +315,8 @@ export function FileSurface({
           imageData={editor.imageData}
           imageMimeType={editor.imageMimeType}
           isMedia={editor.isMedia}
-          mediaData={editor.mediaData}
-          mediaMimeType={editor.mediaMimeType}
+          mediaUrl={editor.mediaUrl}
           mediaKind={editor.mediaKind}
-          mediaSize={editor.mediaSize}
-          mediaPreviewLoading={editor.mediaPreviewLoading}
-          mediaPreviewError={editor.mediaPreviewError}
-          onLoadMediaPreview={() => void editor.loadMediaPreview()}
           diffContent={null}
           viewMode="split"
           selectedFile={null}

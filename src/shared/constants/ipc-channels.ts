@@ -170,7 +170,6 @@ export const IPC = {
   GIT_GET_HTML_PREVIEW_URL: 'git:get-html-preview-url',
   GIT_READ_IMAGE_FILE: 'git:read-image-file',
   GIT_GET_MEDIA_FILE_METADATA: 'git:get-media-file-metadata',
-  GIT_READ_MEDIA_FILE: 'git:read-media-file',
   GIT_RESTORE_FILE: 'git:restore-file',
   GIT_DISCARD_ALL_CHANGES: 'git:discard-all-changes',
   GIT_INSPECT_COMMIT_SCOPE: 'git:inspect-commit-scope',

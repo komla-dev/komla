@@ -3,6 +3,7 @@ import { constants as fsConstants, createWriteStream } from 'fs';
 import {
   access,
   lstat,
+  open,
   readdir,
   readFile,
   readlink,
@@ -42,7 +43,7 @@ import {
 } from './git/git-status';
 import { FOLDER_FILE_LIMIT } from './git/list-folder-files';
 import { gitService } from './git.service';
-import { htmlPreviewService } from './html-preview.service';
+import { htmlPreviewService, type StreamedFile } from './html-preview.service';
 import { localCopyService } from './local-copy.service';
 import { getKomlaBasePath } from './paths';
 import { remoteCompanionService } from './remote-companion.service';
@@ -71,6 +72,13 @@ const REMOTE_TEXT_BYTE_CAP = 5 * 1024 * 1024;
 const REMOTE_IMAGE_BYTE_CAP = 7 * 1024 * 1024;
 const LOCAL_IMAGE_BYTE_CAP = 10 * 1024 * 1024;
 const LOCAL_MEDIA_BYTE_CAP = 50 * 1024 * 1024;
+// Audio and video stream to the viewer this many bytes at a time, so a large one plays without
+// being read whole first.
+// A remote read holds one of the host's few SSH run slots until it ends, cancelled or not.
+const REMOTE_MEDIA_CHUNK_BYTES = 1024 * 1024;
+const LOCAL_MEDIA_CHUNK_BYTES = 1024 * 1024;
+// A range of an SSH host's file is read in blocks this large, which `dd` can skip to.
+const REMOTE_RANGE_BLOCK_BYTES = 64 * 1024;
 const VIEWER_FOLDER_FILE_LIMIT = 200;
 // Folders like /tmp can hold thousands of entries, so a listing looks up when at most this
 // many folders and this many files were modified.
@@ -108,6 +116,79 @@ function viewerByteCap(filePath: string, remote: boolean): number {
     default:
       return REMOTE_TEXT_BYTE_CAP;
   }
+}
+
+/** Part of a file a viewer read prints instead of the whole file. */
+interface ByteRange {
+  start: number;
+  length: number;
+}
+
+/** The first of the blocks that hold a range, as remote read scripts print them. */
+function firstRangeBlock({ start }: ByteRange): number {
+  return Math.floor(start / REMOTE_RANGE_BLOCK_BYTES);
+}
+
+/**
+ * The shell command that prints `file`, base64-encoded: all of it, or the whole blocks that hold
+ * a range, as POSIX `dd` reads them; nothing for an empty range, which some `dd`s would read to
+ * the end.
+ */
+function printFileCommand(file: string, range: ByteRange | undefined): string {
+  if (!range) return `komla_b64 <${file}`;
+  if (range.length === 0) return ':';
+  const skip = firstRangeBlock(range);
+  const count = Math.ceil((range.start + range.length) / REMOTE_RANGE_BLOCK_BYTES) - skip;
+  return `dd if=${file} bs=${REMOTE_RANGE_BLOCK_BYTES} skip=${skip} count=${count} 2>/dev/null | komla_b64`;
+}
+
+/**
+ * Whether a remote read script finds the file's size. A read of part of a file doesn't, as only
+ * the read that opens a stream needs it, and some `wc`s, as BusyBox's, read the whole file.
+ */
+function readsSize(range: ByteRange | undefined): boolean {
+  return range === undefined || range.length === 0;
+}
+
+/** The bytes of a range from the blocks a remote read printed for it. */
+function bytesInRange(data: string, range: ByteRange): Uint8Array {
+  const offset = range.start - firstRangeBlock(range) * REMOTE_RANGE_BLOCK_BYTES;
+  return Buffer.from(data, 'base64').subarray(offset, offset + range.length);
+}
+
+/**
+ * A file on an SSH host streamed by range, from `readRange`, which prints a range of it with the
+ * file's SIZE as a remote read script does.
+ */
+async function remoteStreamedFile(
+  readRange: (range: ByteRange) => Promise<Map<string, string>>
+): Promise<Omit<StreamedFile, 'mimeType'>> {
+  const size = Number((await readRange({ start: 0, length: 0 })).get('SIZE'));
+  if (!Number.isSafeInteger(size) || size < 0) throw new Error('Failed to read remote file size');
+  return {
+    size,
+    chunkBytes: REMOTE_MEDIA_CHUNK_BYTES,
+    read: async (start, length) =>
+      bytesInRange((await readRange({ start, length })).get('DATA') ?? '', { start, length }),
+  };
+}
+
+/** A file on this computer streamed by range. */
+function localStreamedFile(fullPath: string, size: number): Omit<StreamedFile, 'mimeType'> {
+  return {
+    size,
+    chunkBytes: LOCAL_MEDIA_CHUNK_BYTES,
+    read: async (start, length) => {
+      const handle = await open(fullPath, 'r');
+      try {
+        const buffer = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, start);
+        return buffer.subarray(0, bytesRead);
+      } finally {
+        await handle.close();
+      }
+    },
+  };
 }
 
 /**
@@ -166,6 +247,13 @@ async function readLocalViewerFile(
   byteCap: number,
   followSymlinks: boolean
 ): Promise<string> {
+  const size = await localViewerFileSize(fullPath, followSymlinks);
+  if (size > byteCap) throw new Error(`File is too large to view (${size} bytes)`);
+  return (await readFile(fullPath)).toString('base64');
+}
+
+/** The size of a file on this computer the file viewer may show. */
+async function localViewerFileSize(fullPath: string, followSymlinks: boolean): Promise<number> {
   const info = followSymlinks ? await stat(fullPath) : await lstat(fullPath);
   // A folder, a symlinked one too, shows as one, as its listing reads through the symlink.
   if (info.isDirectory() || (info.isSymbolicLink() && (await isFolder(fullPath)))) {
@@ -173,8 +261,7 @@ async function readLocalViewerFile(
   }
   if (info.isSymbolicLink()) throw new Error('Source symlinks are not supported');
   if (!info.isFile()) throw new Error('Source is not a regular file');
-  if (info.size > byteCap) throw new Error(`File is too large to view (${info.size} bytes)`);
-  return (await readFile(fullPath)).toString('base64');
+  return info.size;
 }
 
 /**
@@ -1005,9 +1092,10 @@ class WorkspaceFileService {
   }
 
   /**
-   * A preview URL that shows an HTML page or PDF in the file viewer. With `replacesPrevious`, a
-   * file shown on its own replaces the copy the last such call made of it, for a view that asks
-   * again and again, as each hover of the files list does, and no other view uses.
+   * A preview URL that shows an HTML page, PDF, audio or video in the file viewer. With
+   * `replacesPrevious`, a page or PDF shown on its own replaces the copy the last such call made
+   * of it, for a view that asks again and again, as each hover of the files list does, and no
+   * other view uses. Audio and video stream, so a large file on an SSH host plays as it arrives.
    */
   async getViewerPreviewUrl(
     workspaceId: string,
@@ -1017,7 +1105,14 @@ class WorkspaceFileService {
   ): Promise<string> {
     const filePath = source.kind === 'workspace' ? source.filePath : source.fullPath;
     const kind = getViewableFileKind(filePath);
-    if (kind !== 'html' && kind !== 'pdf') throw new Error('Not an HTML or PDF file');
+    if (kind === 'audio' || kind === 'video') {
+      const file = await this.openStreamedViewerFile(workspaceId, terminalId, source);
+      return htmlPreviewService.createStreamPreviewUrl(pathPosix.basename(filePath), {
+        ...file,
+        mimeType: getMimeType(filePath),
+      });
+    }
+    if (kind !== 'html' && kind !== 'pdf') throw new Error('Not an HTML, PDF, audio or video file');
 
     // Served from its folder, so a page's own stylesheets, scripts and images load.
     if (source.kind === 'workspace') {
@@ -1060,6 +1155,41 @@ class WorkspaceFileService {
         ? { web: true, key: `viewer:${workspaceId}:${owner}:${filePath}` }
         : { web: true }
     );
+  }
+
+  /**
+   * A viewer file to stream by range, checked as readViewerFile checks it but of any size: in the
+   * workspace, or wherever the terminal that printed its path runs.
+   */
+  private async openStreamedViewerFile(
+    workspaceId: string,
+    terminalId: string | null,
+    source: ViewerFileSource
+  ): Promise<Omit<StreamedFile, 'mimeType'>> {
+    const unlimited = Number.MAX_SAFE_INTEGER;
+    if (source.kind === 'workspace') {
+      const workspace = this.getWorkspace(workspaceId);
+      const { filePath } = source;
+      if (isSshWorkspace(workspace)) {
+        return remoteStreamedFile((range) =>
+          this.readRemoteFileValues(workspace, filePath, unlimited, range)
+        );
+      }
+      assertSafeRelativePath(workspace.workingDirectory, filePath, 'filePath');
+      const fullPath = join(workspace.workingDirectory, filePath);
+      return localStreamedFile(fullPath, await localViewerFileSize(fullPath, true));
+    }
+
+    const { fullPath } = source;
+    const { workspace, terminal } = this.getTerminalFileSource(workspaceId, terminalId, fullPath);
+    const run = this.getTerminalFileRunner(workspace, terminal);
+    if (run) {
+      return remoteStreamedFile((range) =>
+        this.readTerminalFileValues(fullPath, run, unlimited, range)
+      );
+    }
+    const localPath = expandTerminalHome(fullPath);
+    return localStreamedFile(localPath, await localViewerFileSize(localPath, false));
   }
 
   /**
@@ -1172,7 +1302,7 @@ class WorkspaceFileService {
   }
 
   /** The script that prints a file a terminal printed the path of, as remoteFileReadScript does. */
-  private terminalFileReadScript(sourcePath: string, byteCap: number): string {
+  private terminalFileReadScript(sourcePath: string, byteCap: number, range?: ByteRange): string {
     return [
       this.remoteBase64Function(),
       this.remoteBase64AvailabilityCheck(),
@@ -1182,10 +1312,10 @@ class WorkspaceFileService {
       'if [ -d "$source_path" ]; then printf "STATUS=FOLDER\\n"; exit 0; fi',
       'if [ -L "$source_path" ]; then printf "STATUS=SYMLINK\\n"; exit 0; fi',
       'if [ ! -f "$source_path" ] || [ ! -r "$source_path" ]; then printf "STATUS=NOT_FOUND\\n"; exit 0; fi',
-      'size=$(wc -c <"$source_path" | tr -d " ")',
+      readsSize(range) ? 'size=$(wc -c <"$source_path" | tr -d " ")' : 'size=',
       'if [ "$size" -gt "$cap" ] 2>/dev/null; then printf "STATUS=TOO_LARGE\\nSIZE=%s\\n" "$size"; exit 0; fi',
       'printf "STATUS=OK\\nSIZE=%s\\nDATA=" "$size"',
-      'komla_b64 <"$source_path"',
+      printFileCommand('"$source_path"', range),
       'printf "\\n"',
     ].join('\n');
   }
@@ -1194,8 +1324,23 @@ class WorkspaceFileService {
     sourcePath: string,
     run: (script: string) => Promise<string>
   ): Promise<string> {
+    const values = await this.readTerminalFileValues(
+      sourcePath,
+      run,
+      viewerByteCap(sourcePath, true)
+    );
+    return values.get('DATA') ?? '';
+  }
+
+  /** What terminalFileReadScript printed for a file, once it read the file. */
+  private async readTerminalFileValues(
+    sourcePath: string,
+    run: (script: string) => Promise<string>,
+    byteCap: number,
+    range?: ByteRange
+  ): Promise<Map<string, string>> {
     const values = this.parseKeyValueOutput(
-      await run(this.terminalFileReadScript(sourcePath, viewerByteCap(sourcePath, true)))
+      await run(this.terminalFileReadScript(sourcePath, byteCap, range))
     );
     this.assertRemoteEncodingAvailable(values);
     const status = values.get('STATUS');
@@ -1208,7 +1353,7 @@ class WorkspaceFileService {
       throw new Error(`File is too large to view (${values.get('SIZE') ?? 'unknown'} bytes)`);
     }
     if (status !== 'OK') throw new Error('Failed to read terminal file');
-    return values.get('DATA') ?? '';
+    return values;
   }
 
   /**
@@ -1337,7 +1482,12 @@ class WorkspaceFileService {
    * STATUS of NOT_FOUND, UNSAFE or TOO_LARGE when it is not at most byteCap bytes inside the
    * workspace.
    */
-  private remoteFileReadScript(workspace: Workspace, filePath: string, byteCap: number): string {
+  private remoteFileReadScript(
+    workspace: Workspace,
+    filePath: string,
+    byteCap: number,
+    range?: ByteRange
+  ): string {
     assertCanonicalRemoteRelativePath(filePath);
     logger.debug('reading SSH workspace file', { workspaceId: workspace.id, filePath });
     const linkedPeerPath = this.getLinkedPeerPath(filePath);
@@ -1358,10 +1508,12 @@ class WorkspaceFileService {
       ...this.remoteResolveContainedFileScript(),
       '  if [ -d "$file" ]; then printf "STATUS=FOLDER\\n"; exit 0; fi',
       '  if [ ! -f "$file" ]; then printf "STATUS=NOT_FOUND\\n"; exit 0; fi',
-      '  size=$(wc -c <"$file" 2>/dev/null | tr -d " " || printf "0")',
+      readsSize(range)
+        ? '  size=$(wc -c <"$file" 2>/dev/null | tr -d " " || printf "0")'
+        : '  size=',
       '  if [ "$size" -gt "$cap" ] 2>/dev/null; then printf "STATUS=TOO_LARGE\\nSIZE=%s\\n" "$size"; exit 0; fi',
       '  printf "STATUS=OK\\nSIZE=%s\\nDATA=" "$size"',
-      '  komla_b64 <"$file"',
+      `  ${printFileCommand('"$file"', range)}`,
       '  printf "\\n"',
       ')',
     ].join('\n');
@@ -1372,9 +1524,19 @@ class WorkspaceFileService {
     filePath: string,
     byteCap: number
   ): Promise<string> {
+    return (await this.readRemoteFileValues(workspace, filePath, byteCap)).get('DATA') ?? '';
+  }
+
+  /** What remoteFileReadScript printed for an SSH workspace file, once it read the file. */
+  private async readRemoteFileValues(
+    workspace: Workspace,
+    filePath: string,
+    byteCap: number,
+    range?: ByteRange
+  ): Promise<Map<string, string>> {
     const output = await this.runSsh(
       workspace,
-      this.remoteFileReadScript(workspace, filePath, byteCap)
+      this.remoteFileReadScript(workspace, filePath, byteCap, range)
     );
     const values = this.parseKeyValueOutput(output);
     this.assertRemoteEncodingAvailable(values);
@@ -1389,7 +1551,7 @@ class WorkspaceFileService {
       throw new Error(`Remote file is too large to view (${size} bytes)`);
     }
     if (status !== 'OK') throw new Error('Failed to read remote file');
-    return values.get('DATA') ?? '';
+    return values;
   }
 
   /**

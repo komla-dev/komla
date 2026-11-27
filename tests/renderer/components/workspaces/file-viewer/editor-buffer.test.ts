@@ -221,55 +221,37 @@ describe('editorBufferReducer edits', () => {
   });
 });
 
-describe('editorBufferReducer media previews', () => {
-  const media: BufferContent = {
+describe('editorBufferReducer media', () => {
+  const media = (url: string, diskToken: string): BufferContent => ({
     kind: 'media',
-    mimeType: 'video/mp4',
     mediaKind: 'video',
-    size: 1,
-    diskToken: '1:1',
-    preview: { status: 'idle' },
-  };
-  const openMedia: EditorBufferEvent[] = [
-    { type: 'open', readId: 1, filePath: 'clip.mp4' },
-    { type: 'read', readId: 1, result: { kind: 'loaded', content: media } },
-  ];
+    url,
+    diskToken,
+  });
 
-  it('drops a preview the reread of its file outdated', () => {
+  it('shows media from where it streams, versioned by its token', () => {
     const state = run(
-      ...openMedia,
-      { type: 'media-preview-start', readId: 1 },
-      { type: 'reload', readId: 2, filePath: 'clip.mp4' },
-      { type: 'read', readId: 2, result: { kind: 'loaded', content: media } },
-      {
-        type: 'media-preview-read',
-        readId: 1,
-        result: { ok: true, data: 'old', mimeType: 'video/mp4', kind: 'video' },
-      }
+      { type: 'open', readId: 1, filePath: 'clip.mp4' },
+      { type: 'read', readId: 1, result: { kind: 'loaded', content: media('u1', '1:1') } }
     );
 
     expect(editorBufferFields(state)).toMatchObject({
-      mediaData: null,
-      mediaPreviewLoading: false,
+      isMedia: true,
+      mediaUrl: 'u1',
+      mediaKind: 'video',
+      diskContent: '1:1',
     });
   });
 
-  it('shows a preview with the type it was read as', () => {
+  it('streams from the URL of the latest read', () => {
     const state = run(
-      ...openMedia,
-      { type: 'media-preview-start', readId: 1 },
-      {
-        type: 'media-preview-read',
-        readId: 1,
-        result: { ok: true, data: 'd', mimeType: 'video/webm', kind: 'video' },
-      }
+      { type: 'open', readId: 1, filePath: 'clip.mp4' },
+      { type: 'read', readId: 1, result: { kind: 'loaded', content: media('u1', '1:1') } },
+      { type: 'reload', readId: 2, filePath: 'clip.mp4' },
+      { type: 'read', readId: 2, result: { kind: 'loaded', content: media('u2', '1:2') } }
     );
 
-    expect(editorBufferFields(state)).toMatchObject({
-      mediaData: 'd',
-      mediaMimeType: 'video/webm',
-      mediaPreviewLoading: false,
-    });
+    expect(editorBufferFields(state)).toMatchObject({ mediaUrl: 'u2', diskContent: '1:2' });
   });
 });
 

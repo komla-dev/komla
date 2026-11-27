@@ -617,24 +617,6 @@ class GitRepoService {
     };
   }
 
-  async readMediaFileContent(
-    dirPath: string,
-    filePath: string
-  ): Promise<{ data: string; mimeType: string; kind: 'audio' | 'video' }> {
-    const metadata = await this.getMediaFileMetadata(dirPath, filePath);
-    if (metadata.size > 50 * 1024 * 1024) {
-      throw new Error('Media file too large (>50MB)');
-    }
-    const fullPath = join(dirPath, filePath);
-    const { readFile } = await import('fs/promises');
-    const buffer = await readFile(fullPath);
-    return {
-      data: buffer.toString('base64'),
-      mimeType: metadata.mimeType,
-      kind: metadata.kind,
-    };
-  }
-
   async getMediaFileMetadata(
     dirPath: string,
     filePath: string

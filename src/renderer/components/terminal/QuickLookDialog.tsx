@@ -1015,16 +1015,26 @@ function PagePreview({ workspaceId, item, name }: BodyProps) {
   return <BrowserPreviewFrame filePath={item.path} url={url.value} />;
 }
 
-/** Images, SVGs (as images, so their scripts never run), audio and video. */
+/** Images, and SVGs as images, so their scripts never run. */
 function BinaryPreview({ workspaceId, item, kind, name }: BodyProps) {
+  if (kind === 'audio' || kind === 'video') {
+    return <MediaPreview workspaceId={workspaceId} item={item} kind={kind} name={name} />;
+  }
+  return <ImagePreview workspaceId={workspaceId} item={item} kind={kind} name={name} />;
+}
+
+function ImagePreview({ workspaceId, item, name }: BodyProps) {
   const file = useViewerRequest(workspaceId, item, readFile);
   if (file.status !== 'loaded') return <ViewerStatus pending={file} item={item} name={name} />;
   const { data, mimeType } = file.value;
-  return kind === 'audio' || kind === 'video' ? (
-    <MediaPane data={data} mimeType={mimeType} kind={kind} fileName={name} />
-  ) : (
-    <ImagePane data={data} mimeType={mimeType} fileName={name} />
-  );
+  return <ImagePane data={data} mimeType={mimeType} fileName={name} />;
+}
+
+/** Audio and video, streamed, so a large file on an SSH host plays as it arrives. */
+function MediaPreview({ workspaceId, item, kind, name }: BodyProps & { kind: 'audio' | 'video' }) {
+  const url = useViewerRequest(workspaceId, item, getPreviewUrl);
+  if (url.status !== 'loaded') return <ViewerStatus pending={url} item={item} name={name} />;
+  return <MediaPane url={url.value} kind={kind} fileName={name} />;
 }
 
 /** Markdown, text files, and files of other types that turn out to be text. */

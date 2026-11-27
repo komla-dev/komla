@@ -138,8 +138,7 @@ describe('ContentArea', () => {
     renderContentArea({
       missingOnDisk: true,
       isMedia: true,
-      mediaData: 'data',
-      mediaMimeType: 'video/mp4',
+      mediaUrl: 'komla-preview://t/clip.mp4',
       mediaKind: 'video',
     });
 

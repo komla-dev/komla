@@ -889,7 +889,12 @@ export function InlineFilePreviewPanel({
           ) {
             return;
           }
-          await reconcileEditorWithDisk(ed, { workspaceId, workingDirectory, isRemoteWorkspace });
+          await reconcileEditorWithDisk(ed, {
+            workspaceId,
+            workingDirectory,
+            isRemoteWorkspace,
+            changedPaths: change?.changedPaths,
+          });
         } finally {
           const latestEventAt =
             useWorktreeEventsStore.getState().lastEventByWorkspace[workspaceId] ?? 0;
@@ -1014,13 +1019,8 @@ export function InlineFilePreviewPanel({
             imageData={editor.imageData}
             imageMimeType={editor.imageMimeType}
             isMedia={editor.isMedia}
-            mediaData={editor.mediaData}
-            mediaMimeType={editor.mediaMimeType}
+            mediaUrl={editor.mediaUrl}
             mediaKind={editor.mediaKind}
-            mediaSize={editor.mediaSize}
-            mediaPreviewLoading={editor.mediaPreviewLoading}
-            mediaPreviewError={editor.mediaPreviewError}
-            onLoadMediaPreview={() => void editor.loadMediaPreview()}
             diffContent={diff.fileContent}
             viewMode={diff.viewMode}
             selectedFile={diff.selectedFile}

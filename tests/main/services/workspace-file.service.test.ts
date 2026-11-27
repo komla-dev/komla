@@ -52,6 +52,7 @@ const {
   htmlPreviewServiceMock: {
     createPreviewUrl: vi.fn(),
     createContentPreviewUrl: vi.fn(),
+    createStreamPreviewUrl: vi.fn(),
   },
   localCopyServiceMock: {
     getLocalCopyPath: vi.fn(),
@@ -928,6 +929,81 @@ describe('workspaceFileService', () => {
     );
   });
 
+  itWithPosixShell('streams an SSH workspace video of any size by range', async () => {
+    const { execFileSync } = await vi.importActual<typeof import('child_process')>('child_process');
+    const folderPath = await mkdtemp(join(tmpdir(), 'komla-ssh-stream-'));
+    tempDirectories.push(folderPath);
+    // Larger than the cap on reading a remote file whole, and not a whole number of blocks.
+    const video = Buffer.alloc(8 * 1024 * 1024 + 12_345);
+    for (let index = 0; index < video.length; index++) video[index] = (index * 7) % 251;
+    await mkdir(join(folderPath, 'out'));
+    await writeFile(join(folderPath, 'out', 'cinematic.mp4'), video);
+    workspaceServiceMock.get.mockReturnValue({
+      ...sshWorkspace,
+      backend: { ...sshWorkspace.backend, remoteDirectory: folderPath },
+    });
+    sshWorkspaceServiceMock.run.mockImplementation(async (_host, command: string) =>
+      execFileSync('/bin/sh', ['-c', command], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    );
+    htmlPreviewServiceMock.createStreamPreviewUrl.mockReturnValue('komla-preview://t/c.mp4');
+    const { workspaceFileService } =
+      await import('../../../src/main/services/workspace-file.service');
+
+    await expect(
+      workspaceFileService.getViewerPreviewUrl('ws-ssh', null, workspaceFile('out/cinematic.mp4'))
+    ).resolves.toBe('komla-preview://t/c.mp4');
+    const [name, file] = htmlPreviewServiceMock.createStreamPreviewUrl.mock.calls[0];
+    expect(name).toBe('cinematic.mp4');
+    expect(file).toMatchObject({ size: video.length, mimeType: 'video/mp4' });
+    // Only the size was read so far, none of the file.
+    expect(sshWorkspaceServiceMock.run).toHaveBeenCalledTimes(1);
+
+    for (const [start, length] of [
+      [0, 100],
+      [65_530, 20],
+      [5 * 1024 * 1024 + 3, 4 * 1024 * 1024],
+      [video.length - 10, 10],
+    ]) {
+      expect(Buffer.from(await file.read(start, length))).toEqual(
+        video.subarray(start, start + length)
+      );
+    }
+    expect(Buffer.from(await file.read(video.length - 4, 100))).toEqual(video.subarray(-4));
+    // Only the first read finds the size, which some hosts' wc reads the whole file for.
+    const commands = sshWorkspaceServiceMock.run.mock.calls.map(([, command]) => command as string);
+    expect(commands[0]).toContain('wc -c');
+    expect(commands.slice(1).some((command) => command.includes('wc -c'))).toBe(false);
+  });
+
+  it('does not stream an SSH workspace video outside the workspace', async () => {
+    workspaceServiceMock.get.mockReturnValue(sshWorkspace);
+    sshWorkspaceServiceMock.run.mockResolvedValue('STATUS=UNSAFE\n');
+    const { workspaceFileService } =
+      await import('../../../src/main/services/workspace-file.service');
+
+    await expect(
+      workspaceFileService.getViewerPreviewUrl('ws-ssh', null, workspaceFile('out/clip.mp4'))
+    ).rejects.toThrow('Refusing to read path outside the workspace');
+    expect(htmlPreviewServiceMock.createStreamPreviewUrl).not.toHaveBeenCalled();
+  });
+
+  itWithTerminalFiles('streams a video a local terminal printed the path of', async () => {
+    const sourcePath = await createSourceFile('clip.mp4');
+    workspaceServiceMock.get.mockReturnValue(localWorkspace);
+    htmlPreviewServiceMock.createStreamPreviewUrl.mockReturnValue('komla-preview://t/clip.mp4');
+    const { workspaceFileService } =
+      await import('../../../src/main/services/workspace-file.service');
+
+    await workspaceFileService.getViewerPreviewUrl(
+      'ws-local',
+      'term-local',
+      terminalFile(sourcePath)
+    );
+    const [, file] = htmlPreviewServiceMock.createStreamPreviewUrl.mock.calls[0];
+    expect(file.size).toBe('contents'.length);
+    expect(Buffer.from(await file.read(2, 3)).toString()).toBe('nte');
+  });
+
   it('replaces the hover card preview before of the same file', async () => {
     workspaceServiceMock.get.mockReturnValue(sshWorkspace);
     sshWorkspaceServiceMock.run.mockResolvedValue('STATUS=OK\nDATA=JVBERg==\n');
@@ -1141,14 +1217,14 @@ describe('workspaceFileService', () => {
     expect(htmlPreviewServiceMock.createPreviewUrl).not.toHaveBeenCalled();
   });
 
-  it('only makes preview URLs for pages and PDFs', async () => {
+  it('only makes preview URLs for pages, PDFs, audio and video', async () => {
     workspaceServiceMock.get.mockReturnValue(localWorkspace);
     const { workspaceFileService } =
       await import('../../../src/main/services/workspace-file.service');
 
     await expect(
       workspaceFileService.getViewerPreviewUrl('ws-local', 'term-local', workspaceFile('a.md'))
-    ).rejects.toThrow('Not an HTML or PDF file');
+    ).rejects.toThrow('Not an HTML, PDF, audio or video file');
   });
 
   /** A folder of agent output: viewable files a minute apart, oldest first, and others. */

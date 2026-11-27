@@ -467,12 +467,6 @@ class GitService {
   ): Promise<{ data: string; mimeType: string }> {
     return gitRepoService.readImageFileContent(dirPath, filePath);
   }
-  readMediaFileContent(
-    dirPath: string,
-    filePath: string
-  ): Promise<{ data: string; mimeType: string; kind: 'audio' | 'video' }> {
-    return gitRepoService.readMediaFileContent(dirPath, filePath);
-  }
   getMediaFileMetadata(
     dirPath: string,
     filePath: string

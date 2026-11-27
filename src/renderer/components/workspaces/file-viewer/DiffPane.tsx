@@ -18,7 +18,7 @@ import { editorFontSize, KOMLA_EDITOR_BASE_OPTIONS } from '@/lib/monaco-loader';
 import { addMonacoShortcutForwarding } from '@/lib/monaco-shortcut-forwarding';
 import { useCustomizationStore } from '@/stores/customization.store';
 
-import { isMediaFile } from '../../../../shared/image-utils';
+import { getMediaKind, isMediaFile } from '../../../../shared/image-utils';
 
 import {
   chooseDiffModelPaths,
@@ -56,6 +56,8 @@ interface DiffPaneProps {
   /** Editor width, in px, at or below which split draws as unified. */
   inlineBreakpointPx?: number;
   allowWorkingTreeMediaPreview?: boolean;
+  /** The workspace whose working tree media streams from. */
+  workspaceId?: string;
   onRetry: () => void;
   onLoadLargeFile: () => void;
   onCloseMissing?: () => void;
@@ -77,102 +79,48 @@ const DIFF_COMPUTATION_BUDGET_MS = 1000;
 const DIFF_REVEAL_FALLBACK_MS = 10_000;
 
 interface BinaryMediaDiffPreviewProps {
-  workingDirectory: string;
+  workspaceId: string;
   filePath: string;
 }
 
-function BinaryMediaDiffPreview({ workingDirectory, filePath }: BinaryMediaDiffPreviewProps) {
-  const currentMediaRef = useRef({ workingDirectory, filePath });
-  const previewRequestIdRef = useRef(0);
-  const [data, setData] = useState<string | null>(null);
-  const [mimeType, setMimeType] = useState<string | null>(null);
-  const [kind, setKind] = useState<'audio' | 'video' | null>(null);
-  const [size, setSize] = useState<number | null>(null);
-  const [loadingMetadata, setLoadingMetadata] = useState(true);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  currentMediaRef.current = { workingDirectory, filePath };
+/**
+ * The working tree's audio or video, streamed, so a large one plays without being read whole
+ * first, from an SSH host too.
+ */
+function BinaryMediaDiffPreview({ workspaceId, filePath }: BinaryMediaDiffPreviewProps) {
+  const [stream, setStream] = useState<{
+    workspaceId: string;
+    filePath: string;
+    url: string | null;
+    error: string | null;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    previewRequestIdRef.current++;
-    setData(null);
-    setMimeType(null);
-    setKind(null);
-    setSize(null);
-    setLoadingMetadata(true);
-    setPreviewLoading(false);
-    setError(null);
-
-    window.api
-      .getMediaFileMetadata(workingDirectory, filePath)
-      .then((result) => {
+    window.api.getViewerPreviewUrl(workspaceId, null, { kind: 'workspace', filePath }).then(
+      (url) => {
+        if (!cancelled) setStream({ workspaceId, filePath, url, error: null });
+      },
+      (err: unknown) => {
         if (cancelled) return;
-        setMimeType(result.mimeType);
-        setKind(result.kind);
-        setSize(result.size);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Failed to read media metadata');
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingMetadata(false);
-      });
-
+        const error = err instanceof Error ? err.message : 'Failed to read media file';
+        setStream({ workspaceId, filePath, url: null, error });
+      }
+    );
     return () => {
       cancelled = true;
     };
-  }, [workingDirectory, filePath]);
+  }, [workspaceId, filePath]);
 
-  const loadPreview = useCallback(async () => {
-    const requestId = ++previewRequestIdRef.current;
-    const requestedMedia = { workingDirectory, filePath };
-    setPreviewLoading(true);
-    setError(null);
-    try {
-      const result = await window.api.readMediaFile(workingDirectory, filePath);
-      if (
-        requestId !== previewRequestIdRef.current ||
-        currentMediaRef.current.workingDirectory !== requestedMedia.workingDirectory ||
-        currentMediaRef.current.filePath !== requestedMedia.filePath
-      ) {
-        return;
-      }
-      setData(result.data);
-      setMimeType(result.mimeType);
-      setKind(result.kind);
-    } catch (err) {
-      if (
-        requestId !== previewRequestIdRef.current ||
-        currentMediaRef.current.workingDirectory !== requestedMedia.workingDirectory ||
-        currentMediaRef.current.filePath !== requestedMedia.filePath
-      ) {
-        return;
-      }
-      setError(err instanceof Error ? err.message : 'Failed to read media file');
-    } finally {
-      if (
-        requestId === previewRequestIdRef.current &&
-        currentMediaRef.current.workingDirectory === requestedMedia.workingDirectory &&
-        currentMediaRef.current.filePath === requestedMedia.filePath
-      ) {
-        setPreviewLoading(false);
-      }
-    }
-  }, [workingDirectory, filePath]);
-
+  const current =
+    stream?.workspaceId === workspaceId && stream.filePath === filePath ? stream : null;
   return (
     <MediaPane
-      data={data}
-      mimeType={mimeType ?? 'application/octet-stream'}
-      kind={kind ?? 'video'}
+      url={current?.url ?? null}
+      kind={getMediaKind(filePath) ?? 'video'}
       fileName={filePath}
-      fileSize={size}
-      loading={loadingMetadata || previewLoading}
-      error={error}
-      onLoadPreview={loadingMetadata ? undefined : loadPreview}
+      loading={current === null}
+      error={current?.error ?? null}
     />
   );
 }
@@ -208,7 +156,6 @@ function MissingDiffFilePanel({
 }
 
 function renderDiffPaneStatus(params: {
-  workingDirectory: string;
   fileContent: FileDiffContent | null;
   selectedFile: string | null;
   loading: boolean;
@@ -218,13 +165,13 @@ function renderDiffPaneStatus(params: {
   largeFileBlock: { lines: number } | null;
   hasFiles: boolean;
   allowWorkingTreeMediaPreview: boolean;
+  workspaceId: string | undefined;
   onRetry: () => void;
   onLoadLargeFile: () => void;
   onCloseMissing?: () => void;
   onRefreshMissing?: () => void;
 }): React.ReactElement | null {
   const {
-    workingDirectory,
     fileContent,
     selectedFile,
     loading,
@@ -234,6 +181,7 @@ function renderDiffPaneStatus(params: {
     largeFileBlock,
     hasFiles,
     allowWorkingTreeMediaPreview,
+    workspaceId,
     onRetry,
     onLoadLargeFile,
     onCloseMissing,
@@ -327,12 +275,11 @@ function renderDiffPaneStatus(params: {
     }
     if (
       allowWorkingTreeMediaPreview &&
+      workspaceId &&
       fileContent.status !== 'deleted' &&
       isMediaFile(fileContent.path)
     ) {
-      return (
-        <BinaryMediaDiffPreview workingDirectory={workingDirectory} filePath={fileContent.path} />
-      );
+      return <BinaryMediaDiffPreview workspaceId={workspaceId} filePath={fileContent.path} />;
     }
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
@@ -513,6 +460,7 @@ export function DiffPane({
   hideUnchangedRegions,
   inlineBreakpointPx = 900,
   allowWorkingTreeMediaPreview = true,
+  workspaceId,
   onRetry,
   onLoadLargeFile,
   onCloseMissing,
@@ -659,7 +607,6 @@ export function DiffPane({
   );
 
   const statusFallback = renderDiffPaneStatus({
-    workingDirectory,
     fileContent,
     selectedFile,
     loading,
@@ -669,6 +616,7 @@ export function DiffPane({
     largeFileBlock,
     hasFiles,
     allowWorkingTreeMediaPreview,
+    workspaceId,
     onRetry,
     onLoadLargeFile,
     onCloseMissing,

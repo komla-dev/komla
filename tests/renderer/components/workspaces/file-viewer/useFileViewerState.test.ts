@@ -19,6 +19,8 @@ describe('useFileViewerState helpers', () => {
         readWorkspaceImageFile: vi.fn(),
         readFile: vi.fn(),
         readImageFile: vi.fn(),
+        getViewerPreviewUrl: vi.fn(),
+        getMediaFileMetadata: vi.fn(),
       },
     });
   });
@@ -48,13 +50,54 @@ describe('useFileViewerState helpers', () => {
     expect(result.current.imageMimeType).toBe('image/png');
   });
 
-  it('does not send SSH media paths to local filesystem APIs', async () => {
+  it('streams SSH media from the host without local filesystem APIs', async () => {
+    vi.mocked(window.api.getViewerPreviewUrl).mockResolvedValue('komla-preview://t/demo.mp4');
     const { result } = renderHook(() => useFileEditorState('ssh://dev/repo', 'ws-ssh'));
 
     await act(() => result.current.openFile('demo.mp4'));
 
-    expect(result.current.error).toBe('Remote media preview is not supported');
+    expect(result.current).toMatchObject({
+      error: null,
+      isMedia: true,
+      mediaUrl: 'komla-preview://t/demo.mp4',
+      mediaKind: 'video',
+    });
+    expect(window.api.getViewerPreviewUrl).toHaveBeenCalledWith('ws-ssh', null, {
+      kind: 'workspace',
+      filePath: 'demo.mp4',
+    });
+    expect(window.api.getMediaFileMetadata).not.toHaveBeenCalled();
     expect(window.api.readFile).not.toHaveBeenCalled();
+  });
+
+  it('streams local media and versions it by its metadata', async () => {
+    vi.mocked(window.api.getViewerPreviewUrl).mockResolvedValue('komla-preview://t/song.mp3');
+    vi.mocked(window.api.getMediaFileMetadata).mockResolvedValue({
+      mimeType: 'audio/mpeg',
+      kind: 'audio',
+      size: 80 * 1024 * 1024,
+      mtimeMs: 7,
+    });
+    const { result } = renderHook(() => useFileEditorState('/repo', 'ws-local'));
+
+    await act(() => result.current.openFile('song.mp3'));
+
+    expect(result.current).toMatchObject({
+      mediaUrl: 'komla-preview://t/song.mp3',
+      mediaKind: 'audio',
+      diskContent: `${80 * 1024 * 1024}:7`,
+    });
+  });
+
+  it('says why SSH media could not stream', async () => {
+    vi.mocked(window.api.getViewerPreviewUrl).mockRejectedValue(
+      new Error("ENOENT: no such file or directory, 'demo.mp4'")
+    );
+    const { result } = renderHook(() => useFileEditorState('ssh://dev/repo', 'ws-ssh'));
+
+    await act(() => result.current.openFile('demo.mp4'));
+
+    expect(result.current.missingOnDisk).toBe(true);
   });
 
   describe('isFileViewerActive', () => {

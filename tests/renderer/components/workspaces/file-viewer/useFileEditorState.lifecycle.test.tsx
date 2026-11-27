@@ -21,7 +21,7 @@ const api = {
   readImageFile: vi.fn(),
   getFileMetadata: vi.fn(),
   getMediaFileMetadata: vi.fn(),
-  readMediaFile: vi.fn(),
+  getViewerPreviewUrl: vi.fn(),
 };
 
 beforeEach(() => {
@@ -85,63 +85,40 @@ describe('useFileEditorState loading a file', () => {
     });
   });
 
-  it('shows media from its metadata, and its preview only once asked', async () => {
+  it('streams media from its workspace, versioned by its metadata', async () => {
+    api.getViewerPreviewUrl.mockResolvedValueOnce('komla-preview://t/clip.mp4');
     api.getMediaFileMetadata.mockResolvedValueOnce({
       mimeType: 'video/mp4',
       kind: 'video',
       size: 10,
       mtimeMs: 5,
     });
-    const { result } = renderEditor();
+    const { result } = renderHook(() => useFileEditorState('/repo', 'ws-1'));
     await act(() => result.current.openFile('clip.mp4'));
+
     expect(result.current).toMatchObject({
       isMedia: true,
       isImage: false,
-      mediaMimeType: 'video/mp4',
+      mediaUrl: 'komla-preview://t/clip.mp4',
       mediaKind: 'video',
-      mediaSize: 10,
       diskContent: '10:5',
-      mediaData: null,
-      mediaPreviewLoading: false,
+      fileContent: null,
     });
-
-    const preview = deferred<{ data: string; mimeType: string; kind: 'video' }>();
-    api.readMediaFile.mockReturnValueOnce(preview.promise);
-    let loading: Promise<void> | undefined;
-    act(() => {
-      loading = result.current.loadMediaPreview();
-    });
-    expect(result.current.mediaPreviewLoading).toBe(true);
-    await act(async () => {
-      preview.resolve({ data: 'dmlk', mimeType: 'video/webm', kind: 'video' });
-      await loading;
-    });
-    expect(result.current).toMatchObject({
-      mediaData: 'dmlk',
-      mediaMimeType: 'video/webm',
-      mediaPreviewLoading: false,
-      mediaPreviewError: null,
+    expect(api.getViewerPreviewUrl).toHaveBeenCalledWith('ws-1', null, {
+      kind: 'workspace',
+      filePath: 'clip.mp4',
     });
   });
 
-  it('says why a media preview failed', async () => {
-    api.getMediaFileMetadata.mockResolvedValueOnce({
-      mimeType: 'audio/mpeg',
-      kind: 'audio',
-      size: 3,
-      mtimeMs: 1,
-    });
-    api.readMediaFile.mockRejectedValueOnce(new Error('too big'));
+  it('says media plays only from a workspace', async () => {
     const { result } = renderEditor();
     await act(() => result.current.openFile('song.mp3'));
 
-    await act(() => result.current.loadMediaPreview());
-
     expect(result.current).toMatchObject({
-      mediaPreviewLoading: false,
-      mediaPreviewError: 'too big',
-      mediaData: null,
+      isMedia: false,
+      error: 'Media plays only from a workspace',
     });
+    expect(api.getViewerPreviewUrl).not.toHaveBeenCalled();
   });
 
   it('shows a PDF from its metadata, as a page rather than text', async () => {
@@ -370,29 +347,20 @@ describe('useFileEditorState reads that finish late', () => {
     });
   });
 
-  it('stops loading a media preview that a reload of the file outdated', async () => {
+  it('streams the file a reload found changed from a new URL', async () => {
     const metadata = { mimeType: 'video/mp4', kind: 'video', size: 10, mtimeMs: 5 };
     api.getMediaFileMetadata.mockResolvedValue(metadata);
-    const { result } = renderEditor();
+    api.getViewerPreviewUrl.mockResolvedValueOnce('komla-preview://old/clip.mp4');
+    const { result } = renderHook(() => useFileEditorState('/repo', 'ws-1'));
     await act(() => result.current.openFile('clip.mp4'));
-    const preview = deferred<{ data: string; mimeType: string; kind: 'video' }>();
-    api.readMediaFile.mockReturnValueOnce(preview.promise);
-    let loading: Promise<void> | undefined;
-    act(() => {
-      loading = result.current.loadMediaPreview();
-    });
 
     api.getMediaFileMetadata.mockResolvedValue({ ...metadata, mtimeMs: 6 });
+    api.getViewerPreviewUrl.mockResolvedValueOnce('komla-preview://new/clip.mp4');
     await act(() => result.current.reloadFromDisk());
-    await act(async () => {
-      preview.resolve({ data: 'old', mimeType: 'video/mp4', kind: 'video' });
-      await loading;
-    });
 
     expect(result.current).toMatchObject({
       diskContent: '10:6',
-      mediaData: null,
-      mediaPreviewLoading: false,
+      mediaUrl: 'komla-preview://new/clip.mp4',
     });
   });
 });

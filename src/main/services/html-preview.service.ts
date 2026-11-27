@@ -20,18 +20,47 @@ import type { WebContents } from 'electron';
 const logger = createLogger('HtmlPreviewService');
 const SCHEME = 'komla-preview';
 const SESSION_TTL_MS = 60 * 60 * 1000;
+/**
+ * The most audio and video streams served at once. They don't expire, as a paused video may
+ * play again hours later; past this many, the least recently played one goes. Each is only a
+ * file's name, size and reader, so the limit is far past the views one session opens.
+ */
+export const MAX_STREAM_SESSIONS = 500;
 
 /**
  * Whether a session's page expires after its hour. A panel's page loads once and stays while the
  * panel shows, so it doesn't; the next page with its key replaces it, and its window's closing
- * releases it.
+ * releases it. A stream doesn't either, as createStreamPreviewUrl says.
  */
-function expires(session: object): boolean {
-  return !('panel' in session && session.panel);
+function expires(session: { kind: string }): boolean {
+  return session.kind !== 'stream' && !('panel' in session && session.panel);
+}
+
+/**
+ * The bytes from `start` to `end`, inclusive, read a chunk at a time as the reader takes them, so
+ * a player that seeks away stops the reads it no longer needs; one already started finishes.
+ */
+function streamRange(file: StreamedFile, start: number, end: number): ReadableStream<Uint8Array> {
+  let next = start;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (next > end) {
+        controller.close();
+        return;
+      }
+      const bytes = await file.read(next, Math.min(file.chunkBytes, end - next + 1));
+      if (bytes.length === 0) {
+        controller.error(new Error('The file ended before its range'));
+        return;
+      }
+      controller.enqueue(bytes.subarray(0, end - next + 1));
+      next += bytes.length;
+    },
+  });
 }
 
 /** Whether a session's page is past its hour. */
-function isExpired(session: { createdAt: number }, now: number): boolean {
+function isExpired(session: { kind: string; createdAt: number }, now: number): boolean {
   return expires(session) && now - session.createdAt >= SESSION_TTL_MS;
 }
 
@@ -62,7 +91,23 @@ interface ContentPreviewSession extends PreviewSessionBase {
   fonts: boolean;
 }
 
-type PreviewSession = LocalPreviewSession | ContentPreviewSession;
+/** Reads `length` bytes of a file from `start`, fewer only where the file ends. */
+export type ByteRangeReader = (start: number, length: number) => Promise<Uint8Array>;
+
+/** A file served on its own a range at a time, as audio and video stream. */
+export interface StreamedFile {
+  size: number;
+  mimeType: string;
+  /** The most bytes one read asks for. */
+  chunkBytes: number;
+  read: ByteRangeReader;
+}
+
+interface StreamPreviewSession extends PreviewSessionBase, StreamedFile {
+  kind: 'stream';
+}
+
+type PreviewSession = LocalPreviewSession | ContentPreviewSession | StreamPreviewSession;
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -285,6 +330,28 @@ class HtmlPreviewService {
   }
 
   /**
+   * Serves a file on its own a range at a time, as `<audio>` and `<video>` ask for it, so a large
+   * one plays without being read whole first. Each view gets a stream of its own, which doesn't
+   * expire: only the least recently played go, past MAX_STREAM_SESSIONS.
+   */
+  createStreamPreviewUrl(entryPath: string, file: StreamedFile): string {
+    assertSafeRelativePath('/workspace', entryPath, 'entryPath');
+    const normalizedEntry = normalizeUrlPath(entryPath);
+    this.dropLeastRecentStreams(MAX_STREAM_SESSIONS - 1);
+    const token = randomUUID();
+    this.sessions.set(token, {
+      kind: 'stream',
+      ...file,
+      entryPath: normalizedEntry,
+      createdAt: Date.now(),
+      web: false,
+    });
+    this.pruneOldSessions();
+    this.scheduleSessionExpiry();
+    return `${SCHEME}://${token}/${normalizedEntry.split('/').map(encodeURIComponent).join('/')}`;
+  }
+
+  /**
    * Serves a sidebar panel's page, a file in `rootPath` and what it loads from there, with `head`
    * at the start of each HTML page and Komla's fonts and `stylesheet`. Nothing loads from the web.
    * A `key` keeps only the latest two pages made with it, as createContentPreviewUrl does.
@@ -315,6 +382,16 @@ class HtmlPreviewService {
     this.pruneOldSessions();
     this.scheduleSessionExpiry();
     return `${SCHEME}://${token}/${normalizedEntry.split('/').map(encodeURIComponent).join('/')}`;
+  }
+
+  /** Leaves at most `limit` streams, dropping those played least recently. */
+  private dropLeastRecentStreams(limit: number): void {
+    const streams = Array.from(this.sessions.entries())
+      .filter(([, session]) => session.kind === 'stream')
+      .sort(([, a], [, b]) => a.createdAt - b.createdAt);
+    for (const [token] of streams.slice(0, Math.max(0, streams.length - limit))) {
+      this.sessions.delete(token);
+    }
   }
 
   /** Stops serving the pages made with keys that start so, as a closed window's. */
@@ -353,6 +430,17 @@ class HtmlPreviewService {
     let relativePath = normalizeUrlPath(url.pathname);
     if (!relativePath) {
       relativePath = session.entryPath;
+    }
+
+    if (session.kind === 'stream') {
+      if (relativePath !== session.entryPath) return new Response('Not found', { status: 404 });
+      // Played just now, so the last to go past MAX_STREAM_SESSIONS.
+      session.createdAt = Date.now();
+      const headers = makeHeaders(session.entryPath, false);
+      headers.set('Content-Type', session.mimeType);
+      return rangedResponse(request, session.size, headers, (start, end) =>
+        streamRange(session, start, end)
+      );
     }
 
     if (session.kind === 'content') {
@@ -420,33 +508,13 @@ class HtmlPreviewService {
 
   private async createPdfResponse(fullPath: string, request: Request): Promise<Response> {
     const { size } = await stat(fullPath);
-    const headers = makeHeaders(fullPath, false);
-    headers.set('Accept-Ranges', 'bytes');
-
-    const rangeHeader = request.headers.get('range');
-    const range = rangeHeader ? parseByteRange(rangeHeader, size) : null;
-    if (rangeHeader && !range) {
-      headers.set('Content-Range', `bytes */${size}`);
-      return new Response(null, { status: 416, headers });
-    }
-
-    const start = range?.start ?? 0;
-    const end = range?.end ?? Math.max(size - 1, 0);
-    const contentLength = size === 0 ? 0 : end - start + 1;
-    headers.set('Content-Length', String(contentLength));
-    if (range) {
-      headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
-    }
-
-    if (request.method === 'HEAD' || size === 0) {
-      return new Response(null, { status: range ? 206 : 200, headers });
-    }
-
-    const stream = Readable.toWeb(createReadStream(fullPath, { start, end }));
-    return new Response(stream as ReadableStream<Uint8Array>, {
-      status: range ? 206 : 200,
-      headers,
-    });
+    return rangedResponse(
+      request,
+      size,
+      makeHeaders(fullPath, false),
+      (start, end) =>
+        Readable.toWeb(createReadStream(fullPath, { start, end })) as ReadableStream<Uint8Array>
+    );
   }
 
   private async resolvePreviewPath(
@@ -572,6 +640,38 @@ class HtmlPreviewService {
     );
     this.expiryTimer.unref?.();
   }
+}
+
+/**
+ * A response with the file's bytes, or just the range the request asks for, from `body`, which
+ * gives the bytes from a start to an end, inclusive.
+ */
+function rangedResponse(
+  request: Request,
+  size: number,
+  headers: Headers,
+  body: (start: number, end: number) => ReadableStream<Uint8Array>
+): Response {
+  headers.set('Accept-Ranges', 'bytes');
+
+  const rangeHeader = request.headers.get('range');
+  const range = rangeHeader ? parseByteRange(rangeHeader, size) : null;
+  if (rangeHeader && !range) {
+    headers.set('Content-Range', `bytes */${size}`);
+    return new Response(null, { status: 416, headers });
+  }
+
+  const start = range?.start ?? 0;
+  const end = range?.end ?? Math.max(size - 1, 0);
+  const contentLength = size === 0 ? 0 : end - start + 1;
+  headers.set('Content-Length', String(contentLength));
+  if (range) {
+    headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+  }
+
+  const status = range ? 206 : 200;
+  if (request.method === 'HEAD' || size === 0) return new Response(null, { status, headers });
+  return new Response(body(start, end), { status, headers });
 }
 
 function contentForRequest(

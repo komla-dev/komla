@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 
+import { isSameOrInside } from '@/lib/workspace-file-paths';
 import { useFileListStore } from '@/stores/file-list.store';
 
 import { isMediaFile } from '../../../../shared/image-utils';
@@ -45,10 +46,22 @@ async function observeDisk(
  */
 export async function reconcileEditorWithDisk(
   editorState: EditorState,
-  target: DiskTarget,
+  target: DiskTarget & {
+    /** The paths a worktree change names, when it names them. */
+    changedPaths?: readonly string[];
+  },
   isCancelled: () => boolean = () => false
 ): Promise<void> {
   if (!editorState.filePath) return;
+  // Streamed SSH media has no version to compare, and a reread restarts its playback, so it
+  // rereads only for a change that names it.
+  if (
+    target.isRemoteWorkspace &&
+    isMediaFile(editorState.filePath) &&
+    !isSameOrInside(editorState.filePath, target.changedPaths ?? [])
+  ) {
+    return;
+  }
   const observation = await observeDisk(editorState.filePath, target);
   if (isCancelled()) return;
   const decision = decideDiskReconcile(
@@ -100,11 +113,11 @@ export function useFileWatcherSync(params: {
         ) {
           return;
         }
-
         await reconcileEditorWithDisk(editorState, {
           workspaceId,
           workingDirectory,
           isRemoteWorkspace,
+          changedPaths: change?.changedPaths,
         });
       }
     );

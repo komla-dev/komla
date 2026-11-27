@@ -31,12 +31,8 @@ const mocks = vi.hoisted(() => {
     imageData: null,
     imageMimeType: null,
     isMedia: false,
-    mediaData: null,
-    mediaMimeType: null,
+    mediaUrl: null,
     mediaKind: null,
-    mediaSize: null,
-    mediaPreviewLoading: false,
-    mediaPreviewError: null,
     openFile: () => Promise.resolve(),
     setFileContent: () => {},
     setIsDirty: (_dirty: boolean) => {},
@@ -44,7 +40,6 @@ const mocks = vi.hoisted(() => {
     setMissingOnDisk: () => {},
     setExternalChange: () => {},
     reloadFromDisk: () => Promise.resolve(),
-    loadMediaPreview: () => Promise.resolve(),
     reset: () => {},
   };
   const diff = {

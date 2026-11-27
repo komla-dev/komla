@@ -90,13 +90,8 @@ interface ContentAreaProps {
   imageData?: string | null;
   imageMimeType?: string | null;
   isMedia?: boolean;
-  mediaData?: string | null;
-  mediaMimeType?: string | null;
+  mediaUrl?: string | null;
   mediaKind?: 'audio' | 'video' | null;
-  mediaSize?: number | null;
-  mediaPreviewLoading?: boolean;
-  mediaPreviewError?: string | null;
-  onLoadMediaPreview?: () => void;
   // For diff mode
   diffContent: FileDiffContent | null;
   viewMode: ViewMode;
@@ -551,13 +546,8 @@ export function ContentArea({
   imageData,
   imageMimeType,
   isMedia,
-  mediaData,
-  mediaMimeType,
+  mediaUrl,
   mediaKind,
-  mediaSize,
-  mediaPreviewLoading,
-  mediaPreviewError,
-  onLoadMediaPreview,
   // Diff props
   diffContent,
   viewMode,
@@ -621,19 +611,8 @@ export function ContentArea({
         />
       );
     }
-    if (!missingOnDisk && isMedia && mediaMimeType && mediaKind) {
-      return (
-        <MediaPane
-          data={mediaData ?? null}
-          mimeType={mediaMimeType}
-          kind={mediaKind}
-          fileName={filePath || ''}
-          fileSize={mediaSize}
-          loading={mediaPreviewLoading}
-          error={mediaPreviewError}
-          onLoadPreview={onLoadMediaPreview}
-        />
-      );
+    if (!missingOnDisk && isMedia && mediaUrl && mediaKind) {
+      return <MediaPane url={mediaUrl} kind={mediaKind} fileName={filePath || ''} />;
     }
     const editorPane = (
       <ErrorBoundary key={`browse:${filePath}`}>
@@ -700,6 +679,7 @@ export function ContentArea({
           hideUnchangedRegions={hideUnchangedRegions}
           inlineBreakpointPx={inlineBreakpointPx}
           allowWorkingTreeMediaPreview={allowWorkingTreeMediaPreview}
+          workspaceId={workspaceId}
           onRetry={onRetry}
           onLoadLargeFile={onLoadLargeFile}
           onCloseMissing={onCloseMissing}

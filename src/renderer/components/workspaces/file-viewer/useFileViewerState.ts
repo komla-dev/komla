@@ -6,6 +6,7 @@ import { useFileListStore } from '@/stores/file-list.store';
 import { useFileViewerStore } from '@/stores/file-viewer.store';
 
 import {
+  getMediaKind,
   isImageFile,
   isMediaFile,
   isPdfFile,
@@ -265,14 +266,10 @@ export interface FileEditorState {
   imageData: string | null;
   imageMimeType: string | null;
   isMedia: boolean;
-  mediaData: string | null;
-  mediaMimeType: string | null;
+  /** Where the media streams from. */
+  mediaUrl: string | null;
   mediaKind: 'audio' | 'video' | null;
-  mediaSize: number | null;
-  mediaPreviewLoading: boolean;
-  mediaPreviewError: string | null;
   openFile: (path: string) => Promise<void>;
-  loadMediaPreview: () => Promise<void>;
   reloadFromDisk: () => Promise<void>;
   setFileContent: (content: string) => void;
   /** `content` was written to disk; `stillDirty` if the user typed on while it was. */
@@ -296,6 +293,36 @@ export function isMissingFileError(error: unknown): boolean {
 function readFailure(error: unknown, fallback: string): BufferReadResult {
   if (isMissingFileError(error)) return { kind: 'missing' };
   return { kind: 'error', message: error instanceof Error ? error.message : fallback };
+}
+
+/**
+ * Audio or video, as the URL it streams from, so a large one plays without being read whole
+ * first, from an SSH host too. A local one is versioned by its metadata, as other binaries are.
+ */
+async function readStreamedMedia(
+  path: string,
+  target: { workingDirectory: string; workspaceId: string; readId: number }
+): Promise<BufferReadResult> {
+  const { workingDirectory, workspaceId, readId } = target;
+  const isRemoteWorkspace = workingDirectory.startsWith('ssh://');
+  try {
+    const [url, metadata] = await Promise.all([
+      window.api.getViewerPreviewUrl(workspaceId, null, { kind: 'workspace', filePath: path }),
+      isRemoteWorkspace ? null : window.api.getMediaFileMetadata(workingDirectory, path),
+    ]);
+    return {
+      kind: 'loaded',
+      content: {
+        kind: 'media',
+        mediaKind: getMediaKind(path) ?? 'video',
+        url,
+        // An SSH file has no local metadata, so each read of one gets a version of its own.
+        diskToken: metadata ? getFileDiskToken(metadata) : `remote:${readId}`,
+      },
+    };
+  } catch (err) {
+    return readFailure(err, 'Failed to read media file');
+  }
 }
 
 /** Reads a file as what it shows as: text, an image, media or binary metadata. */
@@ -331,24 +358,9 @@ async function readBufferContent(
     }
   }
   if (isMediaFile(path)) {
-    if (isRemoteWorkspace)
-      return { kind: 'error', message: 'Remote media preview is not supported' };
-    try {
-      const result = await window.api.getMediaFileMetadata(workingDirectory, path);
-      return {
-        kind: 'loaded',
-        content: {
-          kind: 'media',
-          mimeType: result.mimeType,
-          mediaKind: result.kind,
-          size: result.size,
-          diskToken: getFileDiskToken(result),
-          preview: { status: 'idle' },
-        },
-      };
-    } catch (err) {
-      return readFailure(err, 'Failed to read media metadata');
-    }
+    // Streamed by the workspace's files, as every file surface knows its workspace.
+    if (!workspaceId) return { kind: 'error', message: 'Media plays only from a workspace' };
+    return readStreamedMedia(path, { ...target, workspaceId });
   }
   try {
     const text = workspaceId
@@ -409,21 +421,6 @@ export function useFileEditorState(
     await read(readId, path);
   }, [read]);
 
-  const loadMediaPreview = useCallback(async () => {
-    const path = bufferFilePath(bufferRef.current);
-    if (!path || !isMediaFile(path)) return;
-    // The preview belongs to the read that showed the file, so a newer one outdates it.
-    const readId = bufferRef.current.read.id;
-    dispatch({ type: 'media-preview-start', readId });
-    try {
-      const result = await window.api.readMediaFile(dirRef.current, path);
-      dispatch({ type: 'media-preview-read', readId, result: { ok: true, ...result } });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to read media file';
-      dispatch({ type: 'media-preview-read', readId, result: { ok: false, message } });
-    }
-  }, []);
-
   const setFileContent = useCallback((text: string) => dispatch({ type: 'edit', text }), []);
   const markSaved = useCallback(
     (text: string, stillDirty: boolean) => dispatch({ type: 'saved', text, stillDirty }),
@@ -452,7 +449,6 @@ export function useFileEditorState(
     ...fields,
     language,
     openFile,
-    loadMediaPreview,
     reloadFromDisk,
     setFileContent,
     markSaved,

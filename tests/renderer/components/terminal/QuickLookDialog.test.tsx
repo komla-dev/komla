@@ -694,6 +694,17 @@ describe('QuickLookDialog', () => {
     expect(embed).toHaveAttribute('src', 'komla-preview://token/paper.pdf');
   });
 
+  it('streams a video from its preview URL instead of reading it whole', async () => {
+    api.getViewerPreviewUrl.mockResolvedValue('komla-preview://token/cinematic.mp4');
+    renderViewer();
+    openViewer([workspaceItem('out/cinematic.mp4')]);
+
+    const video = await screen.findByTitle('cinematic.mp4');
+    expect(video.tagName).toBe('VIDEO');
+    expect(video).toHaveAttribute('src', 'komla-preview://token/cinematic.mp4');
+    expect(api.readViewerFile).not.toHaveBeenCalled();
+  });
+
   it('renders Markdown without its scripts and opens its links in the browser', async () => {
     api.readViewerFile.mockResolvedValue({
       data: base64(

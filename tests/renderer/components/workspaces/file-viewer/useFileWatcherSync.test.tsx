@@ -4,7 +4,10 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { useFileWatcherSync } from '../../../../../src/renderer/components/workspaces/file-viewer/useFileWatcherSync';
+import {
+  reconcileEditorWithDisk,
+  useFileWatcherSync,
+} from '../../../../../src/renderer/components/workspaces/file-viewer/useFileWatcherSync';
 import { useFileListStore } from '../../../../../src/renderer/stores/file-list.store';
 
 import type {
@@ -29,14 +32,9 @@ function makeEditor(overrides: Partial<FileEditorState> = {}): FileEditorState {
     imageData: null,
     imageMimeType: null,
     isMedia: false,
-    mediaData: null,
-    mediaMimeType: null,
+    mediaUrl: null,
     mediaKind: null,
-    mediaSize: null,
-    mediaPreviewLoading: false,
-    mediaPreviewError: null,
     openFile: vi.fn(),
-    loadMediaPreview: vi.fn(),
     reloadFromDisk: vi.fn(),
     setFileContent: vi.fn(),
     markSaved: vi.fn(),
@@ -207,6 +205,43 @@ describe('useFileWatcherSync', () => {
 
     expect(readWorkspaceFile).not.toHaveBeenCalled();
     expect(getFileMetadata).not.toHaveBeenCalled();
+    expect(editor.reloadFromDisk).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves SSH media playing for a change that may not be to it', async () => {
+    const editor = makeEditor({ filePath: 'out/clip.mp4', fileContent: null, isMedia: true });
+    const { onWorktreeChanged } = setup(editor, { isRemoteWorkspace: true });
+
+    await act(async () => {
+      await onWorktreeChanged('ws-1');
+    });
+
+    expect(editor.reloadFromDisk).not.toHaveBeenCalled();
+  });
+
+  it('leaves SSH media playing when a tab shown again rechecks it', async () => {
+    const editor = makeEditor({ filePath: 'out/clip.mp4', fileContent: null, isMedia: true });
+    setup(editor, { isRemoteWorkspace: true });
+
+    await reconcileEditorWithDisk(editor, {
+      workspaceId: 'ws-1',
+      workingDirectory: 'ssh://dev/home/dev/repo',
+      isRemoteWorkspace: true,
+    });
+
+    expect(editor.reloadFromDisk).not.toHaveBeenCalled();
+  });
+
+  it('streams SSH media again for a change that names it', async () => {
+    const editor = makeEditor({ filePath: 'out/clip.mp4', fileContent: null, isMedia: true });
+    const { onWorktreeChanged } = setup(editor, { isRemoteWorkspace: true });
+
+    await act(async () => {
+      await onWorktreeChanged('ws-1', ['file'], 1, undefined, undefined, {
+        changedPaths: ['out/clip.mp4'],
+      });
+    });
+
     expect(editor.reloadFromDisk).toHaveBeenCalledTimes(1);
   });
 
