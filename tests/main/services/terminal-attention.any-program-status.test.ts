@@ -723,6 +723,178 @@ describe('Terminal Attention State: the status any program reports in its Termin
     });
   });
 
+  // Claude 2.1.332 ends a turn whose background work it waits for by reporting working, with how
+  // much still runs, and reports its done only once that work ends and it resumed. Its own check
+  // leaves servers out, but not all of them, as `python3 serve_ab.py`.
+  describe("Claude Code's hooks while Claude reports working on for background work", () => {
+    const stillRunning = () => claude('working', { msg: '1 shell still running' });
+    const server = {
+      type: 'shell',
+      status: 'running',
+      id: 'b1',
+      command: 'S=$PWD; sed -i "s/8791/8792/" $S/serve_ab.py; python3 $S/serve_ab.py',
+    };
+
+    it('show the done when the Stop names only a server and its report comes after', async () => {
+      const { attention, terminal, windows, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), stop('Serving on 8792', [server]));
+      attention.programStatusChanged('t1', stillRunning());
+
+      expect(!!terminal('t1').agentActive).toBe(false);
+      expect(terminal('t1').attention).toMatchObject({
+        kind: 'turn-complete',
+        message: 'Serving on 8792',
+      });
+      expect(windows.attentionRaised).toHaveBeenCalledTimes(1);
+    });
+
+    it('show the done when the Stop naming only a server comes after its report', async () => {
+      const { attention, terminal, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      attention.programStatusChanged('t1', stillRunning());
+
+      expect(terminal('t1').agentActive).toBe(true);
+
+      await attention.hook(toTerminal('t1'), stop('Serving on 8792', [server]));
+
+      expect(!!terminal('t1').agentActive).toBe(false);
+      expect(terminal('t1').attention).toMatchObject({
+        kind: 'turn-complete',
+        message: 'Serving on 8792',
+      });
+    });
+
+    it('stay done as the count of what still runs changes', async () => {
+      const { attention, terminal, windows, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), stop('Serving', [server, { ...server, id: 'b2' }]));
+      attention.programStatusChanged('t1', claude('working', { msg: '2 shells still running' }));
+      attention.programStatusChanged('t1', stillRunning());
+
+      expect(!!terminal('t1').agentActive).toBe(false);
+      expect(terminal('t1').attention).toMatchObject({ kind: 'turn-complete' });
+      expect(windows.attentionRaised).toHaveBeenCalledTimes(1);
+    });
+
+    it('spin while Claude waits on background work it reports first, as after a reconnect', () => {
+      const { attention, terminal } = harness();
+
+      attention.programStatusChanged('t1', stillRunning());
+
+      expect(terminal('t1').agentActive).toBe(true);
+    });
+
+    it('stay done when the count comes again after a reconnect', async () => {
+      const { attention, terminal, windows, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), stop('Serving', [server]));
+      attention.programStatusChanged('t1', stillRunning());
+      // The attachment ended, so Komla forgot the Terminal's status, and the host repeats it.
+      attention.programStatusChanged('t1', { state: 'clear' });
+      attention.programStatusChanged('t1', stillRunning());
+
+      expect(!!terminal('t1').agentActive).toBe(false);
+      expect(terminal('t1').attention).toMatchObject({ kind: 'turn-complete' });
+      expect(windows.attentionRaised).toHaveBeenCalledTimes(1);
+    });
+
+    it('spin on a count that comes after the turn after the served one failed', async () => {
+      const { attention, terminal, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), stop('Serving', [server]));
+      attention.programStatusChanged('t1', stillRunning());
+      attention.programStatusChanged('t1', claude('error', { msg: 'Overloaded' }));
+      attention.programStatusChanged('t1', stillRunning());
+
+      expect(terminal('t1').agentActive).toBe(true);
+    });
+
+    it('take only a count of what runs for background work, not any working message', async () => {
+      const { attention, terminal, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), stop('Serving', [server]));
+      attention.programStatusChanged('t1', claude('working', { msg: 'Checking the server is still running' }));
+
+      expect(terminal('t1').agentActive).toBe(true);
+    });
+
+    it('spin again when Claude resumes as the server ends', async () => {
+      const { attention, terminal, windows, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), stop('Serving', [server]));
+      attention.programStatusChanged('t1', stillRunning());
+      windows.attentionRaised.mockClear();
+
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), prompt('<task-notification>b1 failed'));
+
+      expect(terminal('t1').agentActive).toBe(true);
+
+      await attention.hook(toTerminal('t1'), stop('The server exited'));
+      attention.programStatusChanged('t1', claude('done'));
+
+      expect(terminal('t1').attention).toMatchObject({
+        kind: 'turn-complete',
+        message: 'The server exited',
+      });
+      expect(windows.attentionRaised).toHaveBeenCalledTimes(1);
+    });
+
+    it('spin on while finite work the Stop names runs, in either order', async () => {
+      for (const reportFirst of [false, true]) {
+        const { attention, terminal, windows, toTerminal } = harness();
+        attention.programStatusChanged('t1', claude('idle'));
+        await attention.hook(toTerminal('t1'), prompt());
+        attention.programStatusChanged('t1', claude('working'));
+        if (reportFirst) attention.programStatusChanged('t1', stillRunning());
+        await attention.hook(toTerminal('t1'), stop('Started', [runningShell]));
+        if (!reportFirst) attention.programStatusChanged('t1', stillRunning());
+        vi.advanceTimersByTime(60_000);
+
+        expect(terminal('t1').agentActive).toBe(true);
+        expect(windows.attentionRaised).not.toHaveBeenCalled();
+      }
+    });
+
+    it('spin on while a server and finite work run, until Claude resumes and is done', async () => {
+      const { attention, terminal, windows, toTerminal } = harness();
+      attention.programStatusChanged('t1', claude('idle'));
+      await attention.hook(toTerminal('t1'), prompt());
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), stop('Started', [server, runningShell]));
+      attention.programStatusChanged('t1', claude('working', { msg: '2 shells still running' }));
+
+      expect(terminal('t1').agentActive).toBe(true);
+
+      attention.programStatusChanged('t1', claude('working'));
+      await attention.hook(toTerminal('t1'), prompt('<task-notification>b1 completed'));
+      await attention.hook(toTerminal('t1'), stop('Tests pass; still serving', [server]));
+      attention.programStatusChanged('t1', stillRunning());
+
+      expect(!!terminal('t1').agentActive).toBe(false);
+      expect(terminal('t1').attention).toMatchObject({
+        kind: 'turn-complete',
+        message: 'Tests pass; still serving',
+      });
+      expect(windows.attentionRaised).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("Claude Code's session moved into its background daemon mid-turn", () => {
     // The Terminal's `claude` then only shows the daemon's session: it clears its status and
     // reports none, and the session's hooks, under a new session id, keep the Terminal's state.

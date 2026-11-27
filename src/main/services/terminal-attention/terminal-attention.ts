@@ -74,6 +74,9 @@ export const SSH_LAUNCH_REPORT_WAIT_MS = 45_000;
 const LAUNCH_SOURCE = 'launch';
 // The synthetic prompts Claude resumes a turn with after background work.
 const CLAUDE_RESUME_PROMPT = /^<(?:task-notification|agent-message)[\s>]/;
+// The background shells Claude waits for after a turn, as it counts them: "1 shell still running",
+// "2 shells, 1 monitor still running". Only shells can be servers, which alone don't hold a turn.
+const CLAUDE_AWAITED_SHELLS = /^\d+ (?:shells?|monitors?)(?:, \d+ monitors?)? still running$/;
 
 /** What an agent hook reports, as the notify endpoint received it. */
 export type AgentHookKind =
@@ -117,6 +120,11 @@ interface ProgramTurn {
   idleReminder?: string;
   /** Its Stop listed background work that resumes the turn, so its done waits for that work. */
   waitsForBackgroundWork?: boolean;
+  /**
+   * Claude reported working on for background work it waits for, in place of its done; see
+   * isClaudeAwaitingBackgroundWork. The Stop says whether that work holds the turn.
+   */
+  awaitsBackgroundWork?: boolean;
   /** The error its StopFailure reported, for the idle that ends it. */
   failure?: string;
 }
@@ -155,6 +163,11 @@ interface ProgramStatus {
    * as Claude does, is the turn's reply, over the one its hooks send.
    */
   summary?: 'awaited' | 'recorded';
+  /**
+   * Its last turn's done showed while Claude reports working on for servers that turn started, so
+   * its reports of what still runs say nothing new.
+   */
+  doneWhileServing?: boolean;
 }
 
 /** A parsed agent hook. Routing and delivery fields stay with the notify endpoint. */
@@ -642,9 +655,25 @@ export class TerminalAttention {
       this.clearInputRequest(terminalId, source);
     }
     current.state = status.state;
+    const awaited = status.state === 'working' && isClaudeAwaitingBackgroundWork(status);
+    if (!awaited) current.doneWhileServing = false;
     this.codexTitleStatus.close(terminalId);
     switch (status.state) {
       case 'working': {
+        if (awaited) {
+          const turn = current.turn;
+          // The turn's done showed already, also before a reconnect; only the count changed.
+          if (!turn && (current.doneWhileServing || this.showsDone(terminalId, source))) {
+            current.doneWhileServing = true;
+            return;
+          }
+          // A server, which Claude's own check missed, holds nothing, so the turn is done.
+          if (turn?.stopped && !turn.waitsForBackgroundWork) {
+            this.completeProgramTurn(workspace, terminalId, current, current.heldDone?.message);
+            current.doneWhileServing = true;
+            return;
+          }
+        }
         // Codex reports working as the user submits a prompt, before its hooks run, and a moment
         // as it starts, which its hook makes a turn when it started with a prompt.
         const startup =
@@ -661,6 +690,7 @@ export class TerminalAttention {
           current.turn.reply = current.turn.failure = undefined;
         }
         current.turn ??= startup ? { startup } : {};
+        current.turn.awaitsBackgroundWork = awaited;
         if (!current.turn.startup) this.reportProgram(workspace, terminalId, { kind: 'activity' });
         return;
       }
@@ -1994,7 +2024,11 @@ export class TerminalAttention {
       turn.reply = hook.message;
       turn.stopDelivery = hook.deliveryId;
       turn.waitsForBackgroundWork = waitsForBackgroundWork(hook);
-      if (status.heldDone && !turn.waitsForBackgroundWork) {
+      if (turn.awaitsBackgroundWork && !turn.waitsForBackgroundWork) {
+        // Claude reported working on for what it named, servers only, before this Stop.
+        this.completeProgramTurn(workspace, terminalId, status, status.heldDone?.message);
+        status.doneWhileServing = true;
+      } else if (status.heldDone && !turn.waitsForBackgroundWork) {
         this.completeProgramTurn(workspace, terminalId, status, status.heldDone.message);
       } else if (status.heldDone) {
         const { message } = status.heldDone;
@@ -2027,6 +2061,12 @@ export class TerminalAttention {
       (terminal) => this.programStatuses.get(terminal.id)?.source === hook.source
     );
     return reporting.length === 1 ? reporting[0].id : undefined;
+  }
+
+  /** Whether the Terminal shows the done of a turn this source finished. */
+  private showsDone(terminalId: string, source: string): boolean {
+    const attention = this.getTerminal(terminalId)?.attention;
+    return attention?.kind === 'turn-complete' && attention.source === source;
   }
 
   /** Applies what the program reported in the Terminal as its own hook would. */
@@ -2737,6 +2777,15 @@ const STAND_IN_DONE_MESSAGES = new Set([
   'OpenCode finished',
   'Compacted the conversation',
 ]);
+
+/**
+ * Claude 2.1.332 and later end a turn whose background work they wait for by reporting working,
+ * with how much still runs ("1 shell still running"; see CLAUDE_AWAITED_SHELLS), in
+ * place of their done, which comes once that work ended and Claude resumed for it.
+ */
+function isClaudeAwaitingBackgroundWork(status: TerminalProgramStatus): boolean {
+  return status.app === 'claude-code' && CLAUDE_AWAITED_SHELLS.test(status.msg ?? '');
+}
 
 /** The prompt a prompt-submit hook carries, with its lines, or else its one-line message. */
 /** Claude's reminder that it waits for input, which it sends a minute after a turn ended. */
