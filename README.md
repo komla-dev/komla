@@ -91,4 +91,4 @@ Bug reports and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## License
 
-[MIT](LICENSE), copyright © 2026 Tafjord Invest AS. The license covers the code, not the Komla name or logo: a modified version you distribute needs a different name. See [TRADEMARK.md](TRADEMARK.md).
+[MIT](LICENSE), copyright © 2026 Kobbe Labs AS. The license covers the code, not the Komla name or logo: a modified version you distribute needs a different name. See [TRADEMARK.md](TRADEMARK.md).

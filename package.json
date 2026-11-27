@@ -2,7 +2,7 @@
   "name": "komla",
   "version": "1.3.0",
   "description": "Run multiple AI coding agent CLIs in parallel",
-  "author": "Tafjord Invest AS",
+  "author": "Kobbe Labs AS",
   "license": "MIT",
   "private": true,
   "homepage": "https://komla.dev",
