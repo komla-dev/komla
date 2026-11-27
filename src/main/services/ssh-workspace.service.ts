@@ -314,6 +314,15 @@ function startsFromTargetBranch(backend: SshWorktreeBackend): boolean {
   return !!backend.baseBranch && startPoint === backend.baseBranch;
 }
 
+/** Whether a new branch starts from origin's default branch, the project naming no target. */
+function startsFromRemoteDefaultBranch(backend: SshWorktreeBackend): boolean {
+  return (
+    !backend.checkoutExistingBranch &&
+    !backend.baseBranch &&
+    (backend.startPoint || 'HEAD') === 'HEAD'
+  );
+}
+
 /**
  * A shell check that lets setup skip fetching: the clone has the commit a new branch starts from,
  * or fetched the branch it starts from in the last few minutes and has it. None when checking out
@@ -337,6 +346,33 @@ function recentStartCheck(
     return `origin_fetched_before && ${has(startPoint)} 2>/dev/null`;
   }
   return `origin_fetched_recently ${shellQuotePosix(originStartPoint)} && { ${has(startPoint)} || ${has(`refs/remotes/origin/${originStartPoint}`)}; } 2>/dev/null`;
+}
+
+/**
+ * Lines that move `start_ref` from the host's copy of a target to origin's when the host has no
+ * copy or its copy is strictly behind origin's, so commits only the host has are kept. Each
+ * argument is a shell word. The companion applies the same rule as the behind count and also
+ * fast-forwards a stale local target; the shell check covers hosts without it.
+ */
+function preferFresherTargetLines(
+  repo: string,
+  refs: { target: string; local: string; origin: string },
+  companionPath?: string
+): string[] {
+  const { target, local, origin } = refs;
+  return [
+    ...(companionPath
+      ? [
+          `  if synced_ref=$(${shellQuotePosix(companionPath)} git target sync -C ${repo} --target ${target} 2>/dev/null) && [ -n "$synced_ref" ]; then`,
+          '    start_ref="$synced_ref"',
+          `  elif git -C ${repo} rev-parse --verify ${origin} >/dev/null 2>&1; then`,
+        ]
+      : [`  if git -C ${repo} rev-parse --verify ${origin} >/dev/null 2>&1; then`]),
+    `    if ! git -C ${repo} rev-parse --verify ${local} >/dev/null 2>&1 || git -C ${repo} merge-base --is-ancestor ${local} ${origin}; then`,
+    `      start_ref=${origin}`,
+    '    fi',
+    '  fi',
+  ];
 }
 
 /** Whether `folder` is a folder directly in the scratch folder under the host's `basePath`. */
@@ -1085,9 +1121,10 @@ class SshWorkspaceService {
     defaultBranch?: string;
   }> {
     const host = this.getHost(backend.hostId);
-    // Only a new branch from the target asks the companion where to start.
+    // Only a new branch from a target, named or origin's default, asks the companion where to start.
     const companionPath =
-      !backend.checkoutExistingBranch && startsFromTargetBranch(backend)
+      startsFromRemoteDefaultBranch(backend) ||
+      (!backend.checkoutExistingBranch && startsFromTargetBranch(backend))
         ? await companion?.()
         : undefined;
     try {
@@ -2410,8 +2447,7 @@ class SshWorkspaceService {
       !backend.baseBranch &&
       startPoint !== 'HEAD' &&
       !/^(?:origin\/|refs\/)/.test(startPoint);
-    const needsRemoteDefaultStartPoint =
-      !backend.checkoutExistingBranch && !backend.baseBranch && startPoint === 'HEAD';
+    const needsRemoteDefaultStartPoint = startsFromRemoteDefaultBranch(backend);
     const repo = shellQuotePosix(backend.remoteRepoPath);
     const recentStart = needsRemoteDefaultStartPoint
       ? undefined
@@ -2692,30 +2728,38 @@ class SshWorkspaceService {
       ...(backend.checkoutExistingBranch
         ? []
         : [
-            needsRemoteDefaultStartPoint
-              ? '  start_ref="$resolved_ref"'
-              : `  start_ref=${shellQuotePosix(startPoint)}`,
-            ...(startsFromTarget || prefersOriginCopy
+            ...(needsRemoteDefaultStartPoint
               ? [
-                  // The companion applies the same rule as the behind count and also
-                  // fast-forwards a stale local target; the shell check covers hosts without it.
-                  ...(companionPath && startsFromTarget
-                    ? [
-                        `  if synced_ref=$(${shellQuotePosix(companionPath)} git target sync -C ${shellQuotePosix(backend.remoteRepoPath)} --target ${shellQuotePosix(startPoint)} 2>/dev/null) && [ -n "$synced_ref" ]; then`,
-                        '    start_ref="$synced_ref"',
-                        `  elif git -C ${shellQuotePosix(backend.remoteRepoPath)} rev-parse --verify ${shellQuotePosix(`origin/${startPoint}`)} >/dev/null 2>&1; then`,
-                      ]
-                    : [
-                        `  if git -C ${shellQuotePosix(backend.remoteRepoPath)} rev-parse --verify ${shellQuotePosix(`origin/${startPoint}`)} >/dev/null 2>&1; then`,
-                      ]),
-                  `    if ! git -C ${shellQuotePosix(backend.remoteRepoPath)} rev-parse --verify ${shellQuotePosix(startPoint)} >/dev/null 2>&1 || git -C ${shellQuotePosix(backend.remoteRepoPath)} merge-base --is-ancestor ${shellQuotePosix(startPoint)} ${shellQuotePosix(`origin/${startPoint}`)}; then`,
-                  `      start_ref=${shellQuotePosix(`origin/${startPoint}`)}`,
-                  '    fi',
-                  '  fi',
+                  '  start_ref="refs/heads/$resolved_target"',
+                  ...preferFresherTargetLines(
+                    repo,
+                    {
+                      target: '"$resolved_target"',
+                      local: '"refs/heads/$resolved_target"',
+                      origin: '"$resolved_ref"',
+                    },
+                    companionPath
+                  ),
                 ]
-              : []),
+              : [
+                  `  start_ref=${shellQuotePosix(startPoint)}`,
+                  ...(startsFromTarget || prefersOriginCopy
+                    ? preferFresherTargetLines(
+                        repo,
+                        {
+                          target: shellQuotePosix(startPoint),
+                          local: shellQuotePosix(startPoint),
+                          origin: shellQuotePosix(`origin/${startPoint}`),
+                        },
+                        startsFromTarget ? companionPath : undefined
+                      )
+                    : []),
+                ]),
             `  if ! git -C ${shellQuotePosix(backend.remoteRepoPath)} cat-file -e "$start_ref^{commit}"; then`,
-            `    origin_start_ref=${shellQuotePosix(`refs/remotes/origin/${originStartPoint}`)}`,
+            // Origin's default branch as just resolved, not origin/HEAD, which may be stale.
+            needsRemoteDefaultStartPoint
+              ? '    origin_start_ref="$resolved_ref"'
+              : `    origin_start_ref=${shellQuotePosix(`refs/remotes/origin/${originStartPoint}`)}`,
             `    if git -C ${shellQuotePosix(backend.remoteRepoPath)} cat-file -e "$origin_start_ref^{commit}"; then`,
             '      start_ref="$origin_start_ref"',
             '    else',

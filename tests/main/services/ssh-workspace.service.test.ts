@@ -6045,6 +6045,194 @@ describe("sshWorkspaceService", () => {
     );
   });
 
+  // A project that names no target follows origin's default branch; the host's own copy of it
+  // still wins when it has commits origin doesn't, as it does for a named target.
+  describe("a new workspace of a project with no target", () => {
+    async function setUpHostClone(root: string) {
+      const originPath = join(root, "origin.git");
+      const seedPath = join(root, "seed");
+      runGit(["init", "--bare", originPath]);
+      runGit(["clone", originPath, seedPath]);
+      writeFileSync(join(seedPath, "README.md"), "initial\n");
+      runGit(["add", "README.md"], seedPath);
+      runGit(["commit", "-m", "initial"], seedPath);
+      runGit(["branch", "-M", "main"], seedPath);
+      runGit(["push", "-u", "origin", "main"], seedPath);
+      runGit([
+        "--git-dir",
+        originPath,
+        "symbolic-ref",
+        "HEAD",
+        "refs/heads/main",
+      ]);
+
+      const { sshWorkspaceService } =
+        await import("../../../src/main/services/ssh-workspace.service");
+      const plan = sshWorkspaceService.createWorkspacePlan({
+        hostId: "ssh-dev",
+        gitUrl: originPath,
+        projectId: "no-target-project",
+        projectName: "no-target",
+        branchName: "agent/no-target",
+        resolvedBasePath: join(root, ".komla"),
+      });
+      mkdirSync(join(plan.backend.remoteRepoPath, ".."), { recursive: true });
+      runGit(["clone", "--bare", originPath, plan.backend.remoteRepoPath]);
+      return { originPath, seedPath, backend: plan.backend };
+    }
+
+    // Commits on the host clone's own main, as landing a workspace there leaves them.
+    function commitOnHostMain(repoPath: string, message: string): string {
+      const parent = runGit([
+        "--git-dir",
+        repoPath,
+        "rev-parse",
+        "refs/heads/main",
+      ]);
+      const tree = runGit([
+        "--git-dir",
+        repoPath,
+        "rev-parse",
+        `${parent}^{tree}`,
+      ]);
+      const commit = runGit([
+        "--git-dir",
+        repoPath,
+        "commit-tree",
+        tree,
+        "-p",
+        parent,
+        "-m",
+        message,
+      ]);
+      runGit(["--git-dir", repoPath, "update-ref", "refs/heads/main", commit]);
+      return commit;
+    }
+
+    itWithPosixShell(
+      "starts from the host's main when it has commits origin doesn't",
+      async () => {
+        const root = mkdtempSync(join(tmpdir(), "komla-ssh-default-ahead-"));
+        try {
+          const { backend } = await setUpHostClone(root);
+          const unpushed = commitOnHostMain(backend.remoteRepoPath, "unpushed");
+
+          execFileSync(
+            "/bin/sh",
+            ["-c", await buildLazySetupCommand(backend)],
+            {
+              encoding: "utf8",
+            },
+          );
+
+          expect(runGit(["rev-parse", "HEAD"], backend.remoteDirectory)).toBe(
+            unpushed,
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    itWithPosixShell(
+      "starts from origin's main when the host's is behind it",
+      async () => {
+        const root = mkdtempSync(join(tmpdir(), "komla-ssh-default-behind-"));
+        try {
+          const { seedPath, backend } = await setUpHostClone(root);
+          runGit(["commit", "--allow-empty", "-m", "pushed later"], seedPath);
+          runGit(["push", "origin", "main"], seedPath);
+          const pushed = runGit(["rev-parse", "HEAD"], seedPath);
+
+          execFileSync(
+            "/bin/sh",
+            ["-c", await buildLazySetupCommand(backend)],
+            {
+              encoding: "utf8",
+            },
+          );
+
+          expect(runGit(["rev-parse", "HEAD"], backend.remoteDirectory)).toBe(
+            pushed,
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    itWithPosixShell(
+      "takes the start point the companion syncs to",
+      async () => {
+        const root = mkdtempSync(
+          join(tmpdir(), "komla-ssh-default-companion-"),
+        );
+        try {
+          const { backend } = await setUpHostClone(root);
+          const unpushed = commitOnHostMain(backend.remoteRepoPath, "unpushed");
+          const companion = writeCompanionStub(root, "printf 'main\\n'");
+
+          execFileSync(
+            "/bin/sh",
+            ["-c", await buildLazySetupCommand(backend, companion.path)],
+            { encoding: "utf8" },
+          );
+
+          expect(readFileSync(companion.callsPath, "utf8")).toContain(
+            `git target sync -C ${backend.remoteRepoPath} --target main`,
+          );
+          expect(runGit(["rev-parse", "HEAD"], backend.remoteDirectory)).toBe(
+            unpushed,
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    // origin/HEAD is recorded only when missing, so it can still name a renamed default.
+    itWithPosixShell(
+      "falls back to origin's default branch, not a stale origin/HEAD, when the companion's ref is missing",
+      async () => {
+        const root = mkdtempSync(join(tmpdir(), "komla-ssh-default-fallback-"));
+        try {
+          const { seedPath, backend } = await setUpHostClone(root);
+          runGit(["push", "origin", "HEAD:refs/heads/old-default"], seedPath);
+          runGit(["commit", "--allow-empty", "-m", "newer"], seedPath);
+          runGit(["push", "origin", "main"], seedPath);
+          const newer = runGit(["rev-parse", "HEAD"], seedPath);
+          runGit([
+            "--git-dir",
+            backend.remoteRepoPath,
+            "fetch",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+          ]);
+          runGit([
+            "--git-dir",
+            backend.remoteRepoPath,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/old-default",
+          ]);
+          const companion = writeCompanionStub(root, "printf 'missing\\n'");
+
+          execFileSync(
+            "/bin/sh",
+            ["-c", await buildLazySetupCommand(backend, companion.path)],
+            { encoding: "utf8" },
+          );
+
+          expect(runGit(["rev-parse", "HEAD"], backend.remoteDirectory)).toBe(
+            newer,
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
   itWithPosixShell(
     "adopts an existing remote repo when the same project is re-added with a new ID",
     async () => {
@@ -7729,7 +7917,7 @@ describe("sshWorkspaceService", () => {
     },
   );
 
-  it("asks for the companion during setup only when a new branch starts from the target", async () => {
+  it("asks for the companion during setup only when a new branch starts from a target", async () => {
     execFileMock.mockImplementation((_file, _args, _options, callback) =>
       captureSshStringInput(() => callback(null, "", "")),
     );
@@ -7768,6 +7956,22 @@ describe("sshWorkspaceService", () => {
     expect(companion).toHaveBeenCalledTimes(1);
     expect(sshStringInputs.at(-1)).toContain(
       "'/home/devuser/.komla/helpers/bin/komla' git target sync",
+    );
+
+    const fromRemoteDefault = sshWorkspaceService.createWorkspacePlan({
+      hostId: "ssh-dev",
+      gitUrl: "git@github.com:komla-dev/komla.git",
+      projectName: "komla",
+      branchName: "agent/default-work",
+      resolvedBasePath: "/home/devuser/.komla",
+    });
+    await sshWorkspaceService.ensureWorkspaceReady(
+      fromRemoteDefault.backend,
+      companion,
+    );
+    expect(companion).toHaveBeenCalledTimes(2);
+    expect(sshStringInputs.at(-1)).toContain(
+      `'/home/devuser/.komla/helpers/bin/komla' git target sync -C '${fromRemoteDefault.backend.remoteRepoPath}' --target "$resolved_target"`,
     );
   });
 
