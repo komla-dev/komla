@@ -45,12 +45,13 @@ const KOMLA_DARK_COLORS: Record<string, string> = {
   'scrollbarSlider.background': '#79797966',
   'scrollbarSlider.hoverBackground': '#646464b3',
   'scrollbarSlider.activeBackground': '#bfbfbf66',
-  // A wholly added or removed line takes both the line and the text color, so they're kept low
-  // enough that a new block reads as a tint over the code, not a solid slab of green or red.
-  'diffEditor.insertedLineBackground': '#22c55e04',
-  'diffEditor.insertedTextBackground': '#22c55e08',
-  'diffEditor.removedLineBackground': '#ef444404',
-  'diffEditor.removedTextBackground': '#ef444408',
+  // The line color stays low, so a new block reads as a tint over the code, not a solid slab of
+  // green or red. The text color marks the words that changed within a line, so it is strong;
+  // globals.css keeps it off wholly added or removed lines, which Monaco marks with it too.
+  'diffEditor.insertedLineBackground': '#22c55e0c',
+  'diffEditor.insertedTextBackground': '#22c55e38',
+  'diffEditor.removedLineBackground': '#ef44440c',
+  'diffEditor.removedTextBackground': '#ef444438',
   // The gutter carries the change's color, so the code's own fill can stay faint.
   'diffEditorGutter.insertedLineBackground': '#22c55e40',
   'diffEditorGutter.removedLineBackground': '#ef444440',
@@ -95,11 +96,11 @@ const KOMLA_LIGHT_COLORS: Record<string, string> = {
   'scrollbarSlider.background': '#0000001f',
   'scrollbarSlider.hoverBackground': '#00000033',
   'scrollbarSlider.activeBackground': '#00000044',
-  // Kept low for the same reason as the dark theme's.
-  'diffEditor.insertedLineBackground': '#22c55e08',
-  'diffEditor.insertedTextBackground': '#22c55e0e',
-  'diffEditor.removedLineBackground': '#ef444408',
-  'diffEditor.removedTextBackground': '#ef44440e',
+  // Set as the dark theme's are, for the same reasons.
+  'diffEditor.insertedLineBackground': '#22c55e16',
+  'diffEditor.insertedTextBackground': '#22c55e40',
+  'diffEditor.removedLineBackground': '#ef444416',
+  'diffEditor.removedTextBackground': '#ef444440',
   'diffEditorGutter.insertedLineBackground': '#22c55e40',
   'diffEditorGutter.removedLineBackground': '#ef444440',
   'diffEditor.border': '#0000001f',

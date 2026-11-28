@@ -1352,6 +1352,19 @@ html[data-status-bar-row='large'] [data-status-bar] {
   opacity: 1;
 }
 
+/* Monaco marks the words that changed within a line with the same class it draws across lines
+   that are wholly added or removed: whole-line marks (left:0), the lines a multi-line change covers
+   end to end (left:0px, filled to the edge), and the inline view's removed lines. The line color
+   tints those alone, so the strong word color marks only words. The selectors read the inline style
+   Monaco's DecorationsOverlay writes; e2e/diff-word-marks.test.ts fails if that markup changes. */
+.monaco-diff-editor .view-overlays .cdr.char-insert[style^='left:0;'],
+.monaco-diff-editor .view-overlays .cdr.char-delete[style^='left:0;'],
+.monaco-diff-editor .view-overlays .cdr.char-insert[style^='left:0px;'][style$='width:100%;'],
+.monaco-diff-editor .view-overlays .cdr.char-delete[style^='left:0px;'][style$='width:100%;'],
+.monaco-diff-editor .line-delete > .view-line.char-delete {
+  background-color: transparent;
+}
+
 /* The line around a pane: a clear one on its own, so a pane without focus keeps an edge against the
    chrome. Around the focused pane (with the focused pane border on) it is a little accent over a
    line not quite twice as strong as the unfocused one, so it reads as a faint tinted edge rather than a
